@@ -31,57 +31,118 @@ struct RelationsProps {
 struct RelationsField {
     ident: Option<syn::Ident>,
     name: Option<String>,
+    ty: syn::Type,
 }
 
 struct RelationNames {
     resource_name: String,
     field_name: syn::Ident,
     relation_name: String,
+    is_option: bool,
 }
 
-#[proc_macro_derive(Resource, attributes(jsonapi))]
+#[proc_macro_derive(Responder, attributes(jsonapi))]
 pub fn resource_macro_derive(input: TokenStream) -> TokenStream {
     let ast = syn::parse(input).unwrap();
-    impl_resource_macro(&ast)
+    impl_responder_macro(&ast)
 }
 
-#[proc_macro_derive(Relations, attributes(jsonapi))]
-pub fn relations_macro_derive(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(IntoRelationships, attributes(jsonapi))]
+pub fn into_relations_macro_derive(input: TokenStream) -> TokenStream {
     impl_relations_macro(&syn::parse(input).unwrap())
+}
+
+#[proc_macro_derive(FromRelationships, attributes(jsonapi))]
+pub fn from_relations_macro_derive(input: TokenStream) -> TokenStream {
+    impl_from_relations_macro(&syn::parse(input).unwrap())
+}
+
+fn impl_from_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
+    let desc = RelationFieldDescription::from(RelationsProps::from_derive_input(ast).unwrap());
+    let mut all_options = false;
+    let var_statements: Vec<TS2> = desc
+        .fields
+        .iter()
+        .map(|names| {
+			if !names.is_option {
+				all_options = false;
+			}
+            let name = &names.relation_name;
+            let field = &names.field_name;
+            let ts = if names.is_option {
+                quote! {
+                    let #field = Some(::jsonapi::FromRelationship::from_relationship(rels.remove(#name)));
+                }
+            } else {
+				let err_msg = format!("missing mandatory relationship '{}'", name);
+                quote! {
+                    let #field;
+                    if let Some(t) = rels.remove(#name) {
+                        #field = ::jsonapi::FromRelationship::from_relationship(t.data)?;
+                    } else {
+						return Err(::jsonapi::Error::new_bad_request(#err_msg));
+					};
+                }
+            };
+            ts
+        })
+        .collect();
+    let struct_statements: Vec<TS2> = desc
+        .fields
+        .into_iter()
+        .map(|names| {
+            let field = names.field_name;
+            let ts = quote! {
+                #field,
+            };
+            ts
+        })
+        .collect();
+    let none_handler = if all_options {
+        // TODO this isn't the most efficient approach in the world
+        quote! {let mut rels: ::std::collections::BTreeMap<String, ::jsonapi::RelationshipData>> = match rels {
+            None => ::std::collections::BTreeMap::new(),
+            Some(b) => b
+        }}
+    } else {
+        quote! {
+            let mut rels = rels.ok_or_else(|| ::jsonapi::Error::new_bad_request("missing mandatory relationships object"))?;
+        }
+    };
+    let struct_name = desc.name;
+    let gen = quote! {
+        impl ::jsonapi::FromRelationships for #struct_name {
+            fn from_relationships(rels: Option<::std::collections::BTreeMap<String, ::jsonapi::RelationshipData>>) -> Result<Self, ::jsonapi::Error> {
+                #none_handler
+                #(#var_statements)*
+                Ok(#struct_name {
+                    #(#struct_statements)*
+                })
+            }
+        }
+    };
+    gen.into()
 }
 
 fn impl_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props: RelationsProps = RelationsProps::from_derive_input(ast).unwrap();
-    let fields = match props.data {
-        ast::Data::Struct(data) => data.fields.into_iter().map(|field| {
-            let resource_name = match field.name {
-                Some(name) => name,
-                None => format!("{}s", field.ident.clone().unwrap()),
-            };
-            RelationNames {
-                resource_name,
-                field_name: field.ident.clone().unwrap(),
-                relation_name: field.ident.clone().unwrap().to_string(),
-            }
-        }),
-        _ => panic!("unreachable"),
-    };
-    let struct_name = props.ident;
-    let statements: Vec<TS2> = fields
+    let desc = RelationFieldDescription::from(props);
+    let statements: Vec<TS2> = desc.fields
         .into_iter()
         .map(|names| {
             let name = names.relation_name;
             let resource = names.resource_name;
             let field = names.field_name;
             let ts = quote! {
-                rels.insert(#name.to_string(), ::jsonapi::Relatable::into_relation(&self.#field, #resource).into());
+                rels.insert(#name.to_string(), ::jsonapi::IntoRelationship::into_relationship(&self.#field, #resource).into());
             };
             ts
         })
         .collect();
+    let struct_name = desc.name;
     (quote! {
-        impl Relations for #struct_name {
-            fn relationships(&self) -> Option<::std::collections::BTreeMap<String, ::jsonapi::RelationshipData>> {
+        impl ::jsonapi::IntoRelationships for #struct_name {
+            fn into_relationships(self) -> Option<::std::collections::BTreeMap<String, ::jsonapi::RelationshipData>> {
                 let mut rels = ::std::collections::BTreeMap::new();
                 #(#statements)*
                 Some(rels)
@@ -91,37 +152,12 @@ fn impl_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
     .into()
 }
 
-fn impl_resource_macro(ast: &syn::DeriveInput) -> TokenStream {
+fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props = ResourceProps::from_derive_input(ast).unwrap();
-    let name = &props.ident;
-    let mut type_name = format!("{}s", name);
-    if let Some(custom_name) = props.name {
-        type_name = custom_name;
-    }
-    // try to identify the id, attributes fields.
-    let mut id_field: Option<ResourceField> = None;
-    let mut attr_field: Option<ResourceField> = None;
-    let mut relations_field: Option<ResourceField> = None;
-    match props.data {
-        ast::Data::Struct(data) => {
-            for field in &data.fields {
-                if let Some(i) = &field.ident {
-                    if i == "id" {
-                        id_field = Some(field.clone())
-                    } else if i == "attributes" {
-                        attr_field = Some(field.clone())
-                    } else if i == "relations" {
-                        relations_field = Some(field.clone())
-                    }
-                }
-            }
-        }
-        _ => panic!("unsupported macro input: must use Struct"),
-    }
-
-    let attr_type = &attr_field.as_ref().unwrap().ty;
-    let attr_name = attr_field.as_ref().unwrap().ident.as_ref().unwrap();
-    let (relations_fn, relations_type) = match relations_field.as_ref() {
+    let desc = ResourceFieldDescription::from(props);
+    let attr_type = &desc.attr_field.ty;
+    let attr_name = desc.attr_field.ident.as_ref().unwrap();
+    let (relations_fn, relations_type) = match desc.relations_field.as_ref() {
         None => (quote! { () }, quote! {()}),
         Some(field) => {
             let relations_name = field.ident.as_ref().unwrap();
@@ -136,9 +172,11 @@ fn impl_resource_macro(ast: &syn::DeriveInput) -> TokenStream {
             )
         }
     };
-    let id_name = id_field.unwrap().ident.unwrap();
+    let id_name = desc.id_field.ident.unwrap();
+    let name = desc.name;
+    let type_name = desc.type_name;
     let gen = quote! {
-        impl Resource for #name {
+        impl ::jsonapi::Responder for #name {
             type Attributes = #attr_type;
             type Relations = #relations_type;
 
@@ -161,4 +199,96 @@ fn impl_resource_macro(ast: &syn::DeriveInput) -> TokenStream {
 
     };
     gen.into()
+}
+
+struct ResourceFieldDescription {
+    name: syn::Ident,
+    type_name: String,
+    id_field: ResourceField,
+    attr_field: ResourceField,
+    relations_field: Option<ResourceField>,
+}
+
+struct RelationFieldDescription {
+    name: syn::Ident,
+    fields: Vec<RelationNames>,
+}
+
+impl From<RelationsProps> for RelationFieldDescription {
+    fn from(props: RelationsProps) -> RelationFieldDescription {
+        RelationFieldDescription {
+            fields: match props.data {
+                ast::Data::Struct(data) => data
+                    .fields
+                    .into_iter()
+                    .map(|field| {
+                        let resource_name = match field.name {
+                            Some(name) => name,
+                            None => format!("{}s", field.ident.clone().unwrap()),
+                        };
+                        let is_option = match field.ty {
+				syn::Type::Path(path) => {
+					if path.path.leading_colon.is_none() && path.path.segments.len() == 1 {
+						match path.path.segments.into_iter().next().unwrap().ident {
+							i if i == "Option" => true,
+							i if i == "ID" => false,
+							i if i == "String" => false,
+							_ => panic!("unsupported type name for deriving Relations, Option<String> or String supported")
+						}
+					} else {
+						panic!("unsupported type name for deriving Relations, Option<String> or String supported")
+					}
+				},
+				_ => panic!("unsupported type for deriving Relations, Option<String> or String supported")
+			};
+                        RelationNames {
+                            resource_name,
+                            field_name: field.ident.clone().unwrap(),
+                            relation_name: field.ident.clone().unwrap().to_string(),
+                            is_option,
+                        }
+                    })
+                    .collect(),
+                _ => panic!("unreachable"),
+            },
+            name: props.ident,
+        }
+    }
+}
+
+impl From<ResourceProps> for ResourceFieldDescription {
+    fn from(props: ResourceProps) -> Self {
+        let name = props.ident;
+        let mut type_name = format!("{}s", name);
+        if let Some(custom_name) = props.name {
+            type_name = custom_name;
+        }
+        // try to identify the id, attributes fields.
+        let mut id_field: Option<ResourceField> = None;
+        let mut attr_field: Option<ResourceField> = None;
+        let mut relations_field: Option<ResourceField> = None;
+        match props.data {
+            ast::Data::Struct(data) => {
+                for field in &data.fields {
+                    if let Some(i) = &field.ident {
+                        if i == "id" {
+                            id_field = Some(field.clone())
+                        } else if i == "attributes" {
+                            attr_field = Some(field.clone())
+                        } else if i == "relations" {
+                            relations_field = Some(field.clone())
+                        }
+                    }
+                }
+            }
+            _ => panic!("unsupported macro input: must use Struct"),
+        }
+        ResourceFieldDescription {
+            name,
+            type_name,
+            id_field: id_field.unwrap(),
+            attr_field: attr_field.unwrap(),
+            relations_field,
+        }
+    }
 }

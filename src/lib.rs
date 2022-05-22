@@ -26,7 +26,7 @@ impl Into<RelationshipData> for Relationship {
 
 #[derive(Serialize, Deserialize)]
 pub struct RelationshipData {
-    data: Relationship,
+    pub data: Relationship,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,6 +42,7 @@ pub struct ResourceRequest<D> {
     #[serde(rename = "type")]
     pub typ: String,
     pub attributes: D,
+    pub relationships: Option<BTreeMap<String, RelationshipData>>,
 }
 
 #[derive(Deserialize)]
@@ -90,9 +91,17 @@ impl Error {
             detail: None,
         }
     }
+    pub fn new_internal_error(title: &str) -> Self {
+        Error {
+            status: "500".to_owned(),
+            code: Some("Internal Server Error".to_owned()),
+            title: title.to_owned(),
+            detail: None,
+        }
+    }
 }
 
-pub trait Resource {
+pub trait Responder {
     type Attributes;
     type Relations;
 
@@ -102,22 +111,75 @@ pub trait Resource {
     fn relations(&self) -> Self::Relations;
 }
 
-pub trait Relations {
-    fn relationships(&self) -> Option<BTreeMap<String, RelationshipData>>;
+pub trait IntoRelationships {
+    fn into_relationships(self) -> Option<BTreeMap<String, RelationshipData>>;
 }
 
-impl Relations for () {
-    fn relationships(&self) -> Option<BTreeMap<String, RelationshipData>> {
+pub trait FromRelationships
+where
+    Self: Sized,
+{
+    fn from_relationships(rels: Option<BTreeMap<String, RelationshipData>>) -> Result<Self, Error>;
+}
+
+impl IntoRelationships for () {
+    fn into_relationships(self) -> Option<BTreeMap<String, RelationshipData>> {
         None
     }
 }
 
-pub trait Relatable {
-    fn into_relation(&self, resource_name: &str) -> Relationship;
+impl FromRelationships for () {
+    fn from_relationships(rels: Option<BTreeMap<String, RelationshipData>>) -> Result<(), Error> {
+        match rels {
+            None => Ok(()),
+            Some(map) => {
+                if map.len() == 0 {
+                    Ok(())
+                } else {
+                    Err(Error::new_bad_request(
+                        "unexpected relationships for this resource type",
+                    ))
+                }
+            }
+        }
+    }
 }
 
-impl Relatable for ID {
-    fn into_relation(&self, resource_name: &str) -> Relationship {
+pub trait IntoRelationship {
+    fn into_relationship(&self, resource_name: &str) -> Relationship;
+}
+
+pub trait FromRelationship
+where
+    Self: Sized,
+{
+    fn from_relationship(r: Relationship) -> Result<Self, Error>;
+}
+
+impl FromRelationship for ID {
+    fn from_relationship(r: Relationship) -> Result<ID, Error> {
+        match r {
+            Relationship::ToOne(one) => Ok(one.id),
+            _ => Err(Error::new_bad_request(
+                "invalid relationship: expected a to-one, got to-many",
+            )),
+        }
+    }
+}
+
+impl FromRelationship for Vec<ID> {
+    fn from_relationship(r: Relationship) -> Result<Vec<ID>, Error> {
+        match r {
+            Relationship::ToMany(many) => Ok(many.into_iter().map(|rel| rel.id).collect()),
+            _ => Err(Error::new_bad_request(
+                "invalid relationship: expected a to-many, got to-one",
+            )),
+        }
+    }
+}
+
+impl IntoRelationship for ID {
+    fn into_relationship(&self, resource_name: &str) -> Relationship {
         Relationship::ToOne(Identifier {
             id: self.clone(),
             typ: resource_name.to_string(),
@@ -125,8 +187,8 @@ impl Relatable for ID {
     }
 }
 
-impl Relatable for Vec<ID> {
-    fn into_relation(&self, resource_name: &str) -> Relationship {
+impl IntoRelationship for Vec<ID> {
+    fn into_relationship(&self, resource_name: &str) -> Relationship {
         Relationship::ToMany(
             self.into_iter()
                 .map(|each| Identifier {
@@ -138,9 +200,9 @@ impl Relatable for Vec<ID> {
     }
 }
 
-impl<R: Resource> From<R> for Response<R::Attributes>
+impl<R: Responder> From<R> for Response<R::Attributes>
 where
-    R::Relations: Relations,
+    R::Relations: IntoRelationships,
 {
     fn from(r: R) -> Self {
         Response {
@@ -150,15 +212,15 @@ where
                     typ: r.name(),
                 },
                 attributes: r.attributes(),
-                relationships: r.relations().relationships(),
+                relationships: r.relations().into_relationships(),
             }]),
         }
     }
 }
 
-impl<R: Resource> From<Vec<R>> for Response<R::Attributes>
+impl<R: Responder> From<Vec<R>> for Response<R::Attributes>
 where
-    R::Relations: Relations,
+    R::Relations: IntoRelationships,
 {
     fn from(v: Vec<R>) -> Self {
         let data = v
@@ -169,7 +231,7 @@ where
                     typ: each.name(),
                 },
                 attributes: each.attributes(),
-                relationships: each.relations().relationships(),
+                relationships: each.relations().into_relationships(),
             })
             .collect();
         Response {

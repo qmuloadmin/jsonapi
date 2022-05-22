@@ -599,6 +599,7 @@ dependencies = [
 [[package]]
 name = "jsonapi"
 version = "0.1.0"
+source = "git+https://github.com/qmuloadmin/jsonapi#c0a8d82cda6cbad8b56e9a6271c8cc94186c8912"
 dependencies = [
  "actix-web",
  "serde",
