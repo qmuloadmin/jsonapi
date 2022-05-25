@@ -99,6 +99,22 @@ impl Error {
             detail: None,
         }
     }
+    pub fn new_forbidden(title: &str) -> Self {
+        Error {
+            status: "403".into(),
+            code: Some("Forbidden".into()),
+            title: title.into(),
+            detail: None,
+        }
+    }
+    pub fn new_unauthorized(title: &str) -> Self {
+        Error {
+            status: "401".into(),
+            code: Some("Unauthorized".into()),
+            title: title.into(),
+            detail: None,
+        }
+    }
 }
 
 pub trait Responder {
