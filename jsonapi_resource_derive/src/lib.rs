@@ -57,6 +57,83 @@ pub fn from_relations_macro_derive(input: TokenStream) -> TokenStream {
     impl_from_relations_macro(&syn::parse(input).unwrap())
 }
 
+#[proc_macro_derive(FromRequest, attributes(jsonapi))]
+pub fn from_request_macro_derive(input: TokenStream) -> TokenStream {
+	impl_from_request_macro(&syn::parse(input).unwrap())
+}
+
+fn impl_from_request_macro(ast: &syn::DeriveInput) -> TokenStream {
+	let desc = ResourceFieldDescription::from(ResourceProps::from_derive_input(ast).unwrap());
+	let missing_id_err = format!("missing required id field in request for resource {}", desc.type_name);
+	let id_not_allowed_err = format!("'id' field not allowed in request for resource {}", desc.type_name);
+	let id_let_statement = match desc.id_field {
+		Some(_) => {
+			// if there is an id field, require the request to have an ID
+			quote! {
+				let id = req.data.id.ok_or(::jsonapi::Error::new_bad_request(#missing_id_err))?;
+			}
+		},
+		None => {
+			// if there is no id field, don't allow the request to have an ID
+			quote! {
+				if req.data.id.is_some() {
+					return Err(::jsonapi::Error::new_bad_request(#id_not_allowed_err));
+				}
+			}
+		}
+	};
+	let relations_let_statement = match &desc.relations_field {
+		Some(field) => {
+			let ty = &field.ty;
+			quote!{
+				let rels: #ty = ::jsonapi::FromRelationships::from_relationships(req.data.relationships)?;
+			}
+		},
+		None => {
+			quote! {
+				let _: () = ::jsonapi::FromRelationships::from_relationships(req.data.relationships)?;
+			}
+		}
+	};
+	let id_statement = match desc.id_field {
+		Some(field) => {
+			let name = field.ident.unwrap();
+			quote! {
+				#name: ::jsonapi::FromID::from_id(id)?,
+			}
+		},
+		None => TS2::new()
+	};
+	let relations_statement = match desc.relations_field {
+		Some(field) => {
+			let name = field.ident.unwrap();
+			quote! {
+				#name: rels,
+			}
+		},
+		None => TS2::new()
+	};
+	let name = desc.name;
+	let attr_type = desc.attr_field.ty;
+	let attr_name = desc.attr_field.ident;
+	let gen = quote!{
+		impl ::jsonapi::FromRequest for #name {
+			type Attributes = #attr_type;
+			fn from_request(req: ::jsonapi::Request<#attr_type>) -> Result<Self, ::jsonapi::Error> {
+				#id_let_statement
+				#relations_let_statement
+				let result = #name {
+					#id_statement
+					#relations_statement
+					#attr_name: req.data.attributes
+				};
+				Ok(result)
+			}
+		}
+	};
+	gen.into()
+}
+
 fn impl_from_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
     let desc = RelationFieldDescription::from(RelationsProps::from_derive_input(ast).unwrap());
     let mut all_options = false;
@@ -64,24 +141,29 @@ fn impl_from_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
         .fields
         .iter()
         .map(|names| {
-			if !names.is_option {
-				all_options = false;
-			}
+            if !names.is_option {
+                all_options = false;
+            }
             let name = &names.relation_name;
             let field = &names.field_name;
             let ts = if names.is_option {
                 quote! {
-                    let #field = Some(::jsonapi::FromRelationship::from_relationship(rels.remove(#name)));
+                    let #field;
+                    if let Some(t) = rels.remove(#name) {
+                        #field = Some(::jsonapi::FromRelationship::from_relationship(t.data)?);
+                    } else {
+                        #field = None;
+                    };
                 }
             } else {
-				let err_msg = format!("missing mandatory relationship '{}'", name);
+                let err_msg = format!("missing mandatory relationship '{}'", name);
                 quote! {
                     let #field;
                     if let Some(t) = rels.remove(#name) {
                         #field = ::jsonapi::FromRelationship::from_relationship(t.data)?;
                     } else {
-						return Err(::jsonapi::Error::new_bad_request(#err_msg));
-					};
+                        return Err(::jsonapi::Error::new_bad_request(#err_msg));
+                    };
                 }
             };
             ts
@@ -133,9 +215,17 @@ fn impl_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
             let name = names.relation_name;
             let resource = names.resource_name;
             let field = names.field_name;
-            let ts = quote! {
-                rels.insert(#name.to_string(), ::jsonapi::IntoRelationship::into_relationship(&self.#field, #resource).into());
-            };
+            let ts = if names.is_option {
+				quote! {
+				if let Some(field) = self.#field {
+					rels.insert(#name.to_string(), ::jsonapi::IntoRelationship::into_relationship(field, #resource).into());
+				}
+				}
+			} else {
+				 quote! {
+                rels.insert(#name.to_string(), ::jsonapi::IntoRelationship::into_relationship(self.#field, #resource).into());
+				 }
+			};
             ts
         })
         .collect();
@@ -172,20 +262,21 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
             )
         }
     };
-    let id_name = desc.id_field.ident.unwrap();
+    let id_name = desc.id_field.unwrap().ident.unwrap();
     let name = desc.name;
     let type_name = desc.type_name;
+	// TODO find a way to remove the clone() of attributes
     let gen = quote! {
         impl ::jsonapi::Responder for #name {
             type Attributes = #attr_type;
             type Relations = #relations_type;
 
-            fn name(&self) -> String {
+            fn name() -> String {
                 #type_name.to_owned().to_lowercase()
             }
 
-            fn id(&self) -> String {
-                self.#id_name.clone()
+            fn id(&self) -> ::jsonapi::ID {
+                ToString::to_string(&self.#id_name).into()
             }
 
             fn attributes(&self) -> #attr_type {
@@ -204,7 +295,7 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
 struct ResourceFieldDescription {
     name: syn::Ident,
     type_name: String,
-    id_field: ResourceField,
+    id_field: Option<ResourceField>,
     attr_field: ResourceField,
     relations_field: Option<ResourceField>,
 }
@@ -231,15 +322,13 @@ impl From<RelationsProps> for RelationFieldDescription {
 					if path.path.leading_colon.is_none() && path.path.segments.len() == 1 {
 						match path.path.segments.into_iter().next().unwrap().ident {
 							i if i == "Option" => true,
-							i if i == "ID" => false,
-							i if i == "String" => false,
-							_ => panic!("unsupported type name for deriving Relations, Option<String> or String supported")
+							_ => false,
 						}
 					} else {
-						panic!("unsupported type name for deriving Relations, Option<String> or String supported")
+						panic!("unsupported type name for deriving Relations, Option<T> or T where T: Into<ID> supported")
 					}
 				},
-				_ => panic!("unsupported type for deriving Relations, Option<String> or String supported")
+				_ => panic!("unsupported type for deriving Relations, Option<T> or T where T:Into<ID supported")
 			};
                         RelationNames {
                             resource_name,
@@ -286,7 +375,7 @@ impl From<ResourceProps> for ResourceFieldDescription {
         ResourceFieldDescription {
             name,
             type_name,
-            id_field: id_field.unwrap(),
+            id_field,
             attr_field: attr_field.unwrap(),
             relations_field,
         }
