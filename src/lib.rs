@@ -140,7 +140,7 @@ pub struct Request<D> {
 #[derive(Serialize, Deserialize)]
 pub struct Response<D> {
     #[serde(flatten)]
-    primary: ResponseType<D>,
+    pub primary: ResponseType<D>,
 }
 
 #[derive(Serialize, Deserialize)]
