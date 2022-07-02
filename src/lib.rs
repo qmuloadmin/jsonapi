@@ -1,3 +1,4 @@
+#[cfg(feature = "actix-web")]
 use actix_web::{
     error::JsonPayloadError,
     http::StatusCode,
@@ -165,19 +166,6 @@ pub enum ErrorStatus {
     Conflict,
     #[serde(rename = "500")]
     InternalError,
-}
-
-impl Into<StatusCode> for &ErrorStatus {
-    fn into(self) -> StatusCode {
-        match self {
-            ErrorStatus::BadRequest => StatusCode::BAD_REQUEST,
-            ErrorStatus::Unauthorized => StatusCode::UNAUTHORIZED,
-            ErrorStatus::Forbidden => StatusCode::FORBIDDEN,
-            ErrorStatus::NotFound => StatusCode::NOT_FOUND,
-            ErrorStatus::Conflict => StatusCode::CONFLICT,
-            ErrorStatus::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
 }
 
 impl std::fmt::Display for ErrorStatus {
@@ -448,6 +436,7 @@ impl<R> ops::Deref for JsonApi<R> {
     }
 }
 
+#[cfg(feature = "actix-web")]
 impl<R: FromRequest> FromWebRequest for JsonApi<R>
 where
     R::Attributes: DeserializeOwned,
@@ -466,16 +455,19 @@ where
     }
 }
 
+#[cfg(feature = "actix-web")]
 pub struct JsonApiExtractFut<T: FromRequest> {
     fut: JsonBody<Request<T::Attributes>>,
 }
 
+#[cfg(feature = "actix-web")]
 impl From<JsonPayloadError> for Error {
     fn from(err: JsonPayloadError) -> Error {
         Error::new_bad_request(&err.to_string())
     }
 }
 
+#[cfg(feature = "actix-web")]
 impl<T: FromRequest> Future for JsonApiExtractFut<T>
 where
     T::Attributes: DeserializeOwned,
@@ -505,6 +497,7 @@ where
     }
 }
 
+#[cfg(feature = "actix-web")]
 impl ResponseError for Error {
     fn status_code(&self) -> StatusCode {
         (&self.status).into()
@@ -515,8 +508,23 @@ impl ResponseError for Error {
     }
 }
 
+#[cfg(feature = "actix-web")]
 impl Into<HttpResponse> for Error {
     fn into(self) -> HttpResponse {
         HttpResponseBuilder::new(self.status_code()).json(Response::from(self))
+    }
+}
+
+#[cfg(feature = "actix-web")]
+impl Into<StatusCode> for &ErrorStatus {
+    fn into(self) -> StatusCode {
+        match self {
+            ErrorStatus::BadRequest => StatusCode::BAD_REQUEST,
+            ErrorStatus::Unauthorized => StatusCode::UNAUTHORIZED,
+            ErrorStatus::Forbidden => StatusCode::FORBIDDEN,
+            ErrorStatus::NotFound => StatusCode::NOT_FOUND,
+            ErrorStatus::Conflict => StatusCode::CONFLICT,
+            ErrorStatus::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 }
