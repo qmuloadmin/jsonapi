@@ -1,15 +1,20 @@
 use actix_web::{
+    error::JsonPayloadError,
     http::StatusCode,
     web::{Json, JsonBody},
-    FromRequest as FromWebRequest, HttpResponse, HttpResponseBuilder, ResponseError, error::JsonPayloadError,
+    FromRequest as FromWebRequest, HttpResponse, HttpResponseBuilder, ResponseError,
 };
 use core::future::Future;
 use futures_core::ready;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt::Display, pin::Pin, task::Poll, ops};
+use std::{collections::BTreeMap, fmt::Display, ops, pin::Pin, task::Poll};
 
-#[derive(Serialize)]
+// TODO: ALl the Deserialize derives should be broken out into a separate feature
+// for clients as its a lot of code that doesn't need to exist for servers
+// check the commit associated with this comment to get a list of types
+// that don't need Deserialize for a server
+#[derive(Serialize, Deserialize)]
 pub struct ResourceResponse<D> {
     #[serde(flatten)]
     pub id: Identifier,
@@ -132,13 +137,13 @@ pub struct Request<D> {
     pub data: ResourceRequest<D>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Response<D> {
     #[serde(flatten)]
     primary: ResponseType<D>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub enum ResponseType<D> {
     #[serde(rename = "data")]
     Ok(Vec<ResourceResponse<D>>),
@@ -146,7 +151,7 @@ pub enum ResponseType<D> {
     Error(Vec<Error>),
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ErrorStatus {
     #[serde(rename = "400")]
     BadRequest,
@@ -185,7 +190,7 @@ impl std::fmt::Display for ErrorStatus {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Error {
     pub status: ErrorStatus,
     // this is a human readable code, not a numeric code (that is status, above)
@@ -443,7 +448,10 @@ impl<R> ops::Deref for JsonApi<R> {
     }
 }
 
-impl<R: FromRequest> FromWebRequest for JsonApi<R> where R::Attributes: DeserializeOwned {
+impl<R: FromRequest> FromWebRequest for JsonApi<R>
+where
+    R::Attributes: DeserializeOwned,
+{
     type Error = Error;
 
     type Future = JsonApiExtractFut<R>;
@@ -452,9 +460,9 @@ impl<R: FromRequest> FromWebRequest for JsonApi<R> where R::Attributes: Deserial
         req: &actix_web::HttpRequest,
         payload: &mut actix_web::dev::Payload,
     ) -> Self::Future {
-        JsonApiExtractFut{
-			fut: JsonBody::new(req, payload, None, true)
-		}
+        JsonApiExtractFut {
+            fut: JsonBody::new(req, payload, None, true),
+        }
     }
 }
 
@@ -463,9 +471,9 @@ pub struct JsonApiExtractFut<T: FromRequest> {
 }
 
 impl From<JsonPayloadError> for Error {
-	fn from(err: JsonPayloadError) -> Error {
-		Error::new_bad_request(&err.to_string())
-	}
+    fn from(err: JsonPayloadError) -> Error {
+        Error::new_bad_request(&err.to_string())
+    }
 }
 
 impl<T: FromRequest> Future for JsonApiExtractFut<T>
@@ -488,12 +496,12 @@ where
         };
 
         Poll::Ready(match res {
-			Err(err) => Err(err),
-			Ok(json_req) => match T::from_request(json_req.into_inner()) {
-				Ok(inner) => Ok(JsonApi(inner)),
-				Err(err) => Err(err)
-			}
-		})
+            Err(err) => Err(err),
+            Ok(json_req) => match T::from_request(json_req.into_inner()) {
+                Ok(inner) => Ok(JsonApi(inner)),
+                Err(err) => Err(err),
+            },
+        })
     }
 }
 
