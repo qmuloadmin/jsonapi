@@ -124,7 +124,7 @@ pub struct Identifier {
     pub typ: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct ResourceRequest<D> {
     pub id: Option<ID>,
     #[serde(rename = "type")]
