@@ -133,7 +133,7 @@ pub struct ResourceRequest<D> {
     pub relationships: Option<BTreeMap<String, RelationshipData>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Request<D> {
     pub data: ResourceRequest<D>,
 }
