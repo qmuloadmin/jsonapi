@@ -5,8 +5,11 @@ use actix_web::{
     web::{Json, JsonBody},
     FromRequest as FromWebRequest, HttpResponse, HttpResponseBuilder, ResponseError,
 };
+#[cfg(feature = "actix-web")]
 use core::future::Future;
+#[cfg(feature = "actix-web")]
 use futures_core::ready;
+#[cfg(feature = "actix-web")]
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Display, ops, pin::Pin, task::Poll};

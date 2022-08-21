@@ -1,10 +1,10 @@
 extern crate proc_macro;
 
-use darling::{ast, util, FromDeriveInput, FromField};
+use darling::{ast, util, FromDeriveInput, FromField, FromMeta};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TS2;
 use quote::quote;
-use syn;
+use syn::{self, Type};
 
 #[derive(FromDeriveInput)]
 #[darling(attributes(jsonapi), supports(struct_named))]
@@ -59,84 +59,107 @@ pub fn from_relations_macro_derive(input: TokenStream) -> TokenStream {
 
 #[proc_macro_derive(FromRequest, attributes(jsonapi))]
 pub fn from_request_macro_derive(input: TokenStream) -> TokenStream {
-	impl_from_request_macro(&syn::parse(input).unwrap())
+    impl_from_request_macro(&syn::parse(input).unwrap())
 }
 
 fn impl_from_request_macro(ast: &syn::DeriveInput) -> TokenStream {
-	let desc = ResourceFieldDescription::from(ResourceProps::from_derive_input(ast).unwrap());
-	let missing_id_err = format!("missing required id field in request for resource {}", desc.type_name);
-	let id_not_allowed_err = format!("'id' field not allowed in request for resource {}", desc.type_name);
-	let id_let_statement = match desc.id_field {
-		Some(_) => {
-			// if there is an id field, require the request to have an ID
-			quote! {
-				let id = req.data.id.ok_or(::jsonapi::Error::new_bad_request(#missing_id_err))?;
-			}
-		},
-		None => {
-			// if there is no id field, don't allow the request to have an ID
-			quote! {
-				if req.data.id.is_some() {
-					return Err(::jsonapi::Error::new_bad_request(#id_not_allowed_err));
-				}
-			}
-		}
-	};
-	let relations_let_statement = match &desc.relations_field {
-		Some(field) => {
-			let ty = &field.ty;
-			quote!{
-				let rels: #ty = ::jsonapi::FromRelationships::from_relationships(req.data.relationships)?;
-			}
-		},
-		None => {
-			quote! {
-				let _: () = ::jsonapi::FromRelationships::from_relationships(req.data.relationships)?;
-			}
-		}
-	};
-	let id_statement = match desc.id_field {
-		Some(field) => {
-			let name = field.ident.unwrap();
-			quote! {
-				#name: ::jsonapi::FromID::from_id(id)?,
-			}
-		},
-		None => TS2::new()
-	};
-	let relations_statement = match desc.relations_field {
-		Some(field) => {
-			let name = field.ident.unwrap();
-			quote! {
-				#name: rels,
-			}
-		},
-		None => TS2::new()
-	};
-	let name = desc.name;
-	let attr_type = desc.attr_field.ty;
-	let attr_name = desc.attr_field.ident;
-	let gen = quote!{
-		impl ::jsonapi::FromRequest for #name {
-			type Attributes = #attr_type;
-			fn from_request(req: ::jsonapi::Request<#attr_type>) -> Result<Self, ::jsonapi::Error> {
-				#id_let_statement
-				#relations_let_statement
-				let result = #name {
-					#id_statement
-					#relations_statement
-					#attr_name: req.data.attributes
-				};
-				Ok(result)
-			}
-		}
-	};
-	gen.into()
+    let desc = ResourceFieldDescription::from(ResourceProps::from_derive_input(ast).unwrap());
+    let missing_id_err = format!(
+        "missing required id field in request for resource {}",
+        desc.type_name
+    );
+    let id_not_allowed_err = format!(
+        "'id' field not allowed in request for resource {}",
+        desc.type_name
+    );
+    let id_let_statement = match desc.id_field {
+        Some(_) => {
+            // if there is an id field, require the request to have an ID
+            quote! {
+                let id = req.data.id.ok_or(::jsonapi::Error::new_bad_request(#missing_id_err))?;
+            }
+        }
+        None => {
+            // if there is no id field, don't allow the request to have an ID
+            quote! {
+                if req.data.id.is_some() {
+                    return Err(::jsonapi::Error::new_bad_request(#id_not_allowed_err));
+                }
+            }
+        }
+    };
+    let relations_let_statement = match &desc.relations_field {
+        Some(field) => {
+            let ty = &field.ty;
+            quote! {
+                let rels: #ty = ::jsonapi::FromRelationships::from_relationships(req.data.relationships)?;
+            }
+        }
+        None => {
+            quote! {
+                let _: () = ::jsonapi::FromRelationships::from_relationships(req.data.relationships)?;
+            }
+        }
+    };
+    let id_statement = match desc.id_field {
+        Some(field) => {
+            let name = field.ident.unwrap();
+            quote! {
+                #name: ::jsonapi::FromID::from_id(id)?,
+            }
+        }
+        None => TS2::new(),
+    };
+    let relations_statement = match desc.relations_field {
+        Some(field) => {
+            let name = field.ident.unwrap();
+            quote! {
+                #name: rels,
+            }
+        }
+        None => TS2::new(),
+    };
+    let name = desc.name;
+    let attr_type;
+    let attributes_statement;
+    match desc.attr_field {
+        None => {
+            // TODO using Option<()> seems unnecessary. We should be able to just use ()
+            // or a wrapper type and implement some custom serde rules for that type
+            // to make it not require the `attributes` object in the request/response
+            attr_type = Type::from_string("Option<()>".into()).unwrap();
+            attributes_statement = TS2::new();
+        }
+        Some(field) => {
+            attr_type = field.ty;
+            let attr_name = Some(field.ident);
+            attributes_statement = quote! {
+                #attr_name: req.data.attributes
+            }
+        }
+    }
+
+    let gen = quote! {
+        impl ::jsonapi::FromRequest for #name {
+            type Attributes = #attr_type;
+            fn from_request(req: ::jsonapi::Request<#attr_type>) -> Result<Self, ::jsonapi::Error> {
+                #id_let_statement
+                #relations_let_statement
+                let result = #name {
+                    #id_statement
+                    #relations_statement
+                    #attributes_statement
+                };
+                Ok(result)
+            }
+        }
+    };
+    gen.into()
 }
 
 fn impl_from_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
     let desc = RelationFieldDescription::from(RelationsProps::from_derive_input(ast).unwrap());
-    let mut all_options = false;
+    let mut all_options = true;
     let var_statements: Vec<TS2> = desc
         .fields
         .iter()
@@ -182,10 +205,12 @@ fn impl_from_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
         .collect();
     let none_handler = if all_options {
         // TODO this isn't the most efficient approach in the world
-        quote! {let mut rels: ::std::collections::BTreeMap<String, ::jsonapi::RelationshipData>> = match rels {
-            None => ::std::collections::BTreeMap::new(),
-            Some(b) => b
-        }}
+        quote! {
+			let mut rels: ::std::collections::BTreeMap<String, ::jsonapi::RelationshipData> = match rels {
+				None => ::std::collections::BTreeMap::new(),
+				Some(b) => b
+			};
+		}
     } else {
         quote! {
             let mut rels = rels.ok_or_else(|| ::jsonapi::Error::new_bad_request("missing mandatory relationships object"))?;
@@ -245,8 +270,6 @@ fn impl_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
 fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props = ResourceProps::from_derive_input(ast).unwrap();
     let desc = ResourceFieldDescription::from(props);
-    let attr_type = &desc.attr_field.ty;
-    let attr_name = desc.attr_field.ident.as_ref().unwrap();
     let (relations_fn, relations_type) = match desc.relations_field.as_ref() {
         None => (quote! { () }, quote! {()}),
         Some(field) => {
@@ -262,10 +285,25 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
             )
         }
     };
+    let (attr_fn, attr_type) = match desc.attr_field {
+        None => (quote! { None }, quote! { Option<()> }),
+        Some(field) => {
+            let attr_name = field.ident.as_ref().unwrap();
+            let field_type = &field.ty;
+            (
+                quote! {
+                    self.#attr_name.clone()
+                },
+                quote! {
+                    #field_type
+                },
+            )
+        }
+    };
     let id_name = desc.id_field.unwrap().ident.unwrap();
     let name = desc.name;
     let type_name = desc.type_name;
-	// TODO find a way to remove the clone() of attributes
+    // TODO find a way to remove the clone() of attributes
     let gen = quote! {
         impl ::jsonapi::Responder for #name {
             type Attributes = #attr_type;
@@ -280,7 +318,7 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
             }
 
             fn attributes(&self) -> #attr_type {
-                self.#attr_name.clone()
+                #attr_fn
             }
 
             fn relations(&self) -> #relations_type {
@@ -296,7 +334,7 @@ struct ResourceFieldDescription {
     name: syn::Ident,
     type_name: String,
     id_field: Option<ResourceField>,
-    attr_field: ResourceField,
+    attr_field: Option<ResourceField>,
     relations_field: Option<ResourceField>,
 }
 
@@ -376,7 +414,7 @@ impl From<ResourceProps> for ResourceFieldDescription {
             name,
             type_name,
             id_field,
-            attr_field: attr_field.unwrap(),
+            attr_field,
             relations_field,
         }
     }
