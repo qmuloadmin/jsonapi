@@ -43,6 +43,12 @@ impl Into<RelationshipData> for Relationship {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct ID(pub String);
 
+impl From<Uuid> for ID {
+    fn from(id: Uuid) -> ID {
+        ID(id.to_string())
+    }
+}
+
 impl From<String> for ID {
     fn from(s: String) -> ID {
         ID(s)
