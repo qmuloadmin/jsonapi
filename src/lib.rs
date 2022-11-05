@@ -13,6 +13,7 @@ use futures_core::ready;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Display, ops, pin::Pin, task::Poll};
+use uuid::Uuid;
 
 // TODO: ALl the Deserialize derives should be broken out into a separate feature
 // for clients as its a lot of code that doesn't need to exist for servers
@@ -109,6 +110,17 @@ impl FromID for isize {
     }
 }
 
+impl FromID for Uuid {
+    fn from_id(id: ID) -> Result<Self, Error> {
+        Uuid::parse_str(&id.0).map_err(|err| {
+            Error::new_bad_request(&format!(
+                "invalid value for UUID id value: {}",
+                err.to_string()
+            ))
+        })
+    }
+}
+
 impl FromID for ID {
     fn from_id(id: ID) -> Result<Self, Error> {
         Ok(id)
@@ -178,6 +190,19 @@ impl std::fmt::Display for ErrorStatus {
             "{}",
             serde_json::to_string::<ErrorStatus>(&self).unwrap()
         )
+    }
+}
+
+pub trait IntoApiError {
+    fn into_api_error(self) -> Error;
+}
+
+impl<E> From<E> for Error
+where
+    E: IntoApiError,
+{
+    fn from(other: E) -> Error {
+        other.into_api_error()
     }
 }
 
