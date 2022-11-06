@@ -199,19 +199,6 @@ impl std::fmt::Display for ErrorStatus {
     }
 }
 
-pub trait IntoApiError {
-    fn into_api_error(self) -> Error;
-}
-
-impl<E> From<E> for Error
-where
-    E: IntoApiError,
-{
-    fn from(other: E) -> Error {
-        other.into_api_error()
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Error {
     pub status: ErrorStatus,
