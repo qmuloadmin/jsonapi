@@ -27,7 +27,7 @@ pub struct ResourceResponse<D> {
     pub relationships: Option<BTreeMap<String, RelationshipData>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum Relationship {
     ToOne(Identifier),
@@ -133,12 +133,12 @@ impl FromID for ID {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RelationshipData {
     pub data: Relationship,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Identifier {
     pub id: ID,
     #[serde(rename = "type")]
@@ -154,6 +154,22 @@ pub struct ResourceRequest<D> {
     pub relationships: Option<BTreeMap<String, RelationshipData>>,
 }
 
+impl<T: Clone> Clone for Request<T> {
+    fn clone(&self) -> Self {
+        Request {
+            data: ResourceRequest {
+                id: self.data.id.clone(),
+                typ: self.data.typ.clone(),
+                attributes: self.data.attributes.clone(),
+                relationships: match &self.data.relationships {
+                    Some(x) => Some(x.clone()),
+                    None => None,
+                },
+            },
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct Request<D> {
     pub data: ResourceRequest<D>,
@@ -163,6 +179,7 @@ pub struct Request<D> {
 pub struct Response<D> {
     #[serde(flatten)]
     pub primary: ResponseType<D>,
+    //	pub included: Option<Vec<ResourceResponse<I>>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -265,14 +282,12 @@ impl Error {
     }
 }
 
-pub trait Responder {
+// IntoResponse is used to create _successful_ jsonapi responses from a resource struct
+// it is not used to create error responses (return a jsonapi::Error::into() for that)
+pub trait IntoResponse {
     type Attributes;
-    type Relations;
 
-    fn name() -> String;
-    fn id(&self) -> ID;
-    fn attributes(&self) -> Self::Attributes;
-    fn relations(&self) -> Self::Relations;
+    fn into_response(self) -> ResourceResponse<Self::Attributes>;
 }
 
 pub trait FromRequest
@@ -384,40 +399,17 @@ where
     }
 }
 
-impl<R: Responder> From<R> for Response<R::Attributes>
-where
-    R::Relations: IntoRelationships,
-{
+impl<R: IntoResponse> From<R> for Response<R::Attributes> {
     fn from(r: R) -> Self {
         Response {
-            primary: ResponseType::Ok(vec![ResourceResponse {
-                id: Identifier {
-                    id: r.id(),
-                    typ: R::name(),
-                },
-                attributes: r.attributes(),
-                relationships: r.relations().into_relationships(),
-            }]),
+            primary: ResponseType::Ok(vec![r.into_response()]),
         }
     }
 }
 
-impl<R: Responder> From<Vec<R>> for Response<R::Attributes>
-where
-    R::Relations: IntoRelationships,
-{
+impl<R: IntoResponse> From<Vec<R>> for Response<R::Attributes> {
     fn from(v: Vec<R>) -> Self {
-        let data = v
-            .into_iter()
-            .map(|each| ResourceResponse {
-                id: Identifier {
-                    id: each.id(),
-                    typ: R::name(),
-                },
-                attributes: each.attributes(),
-                relationships: each.relations().into_relationships(),
-            })
-            .collect();
+        let data = v.into_iter().map(|each| each.into_response()).collect();
         Response {
             primary: ResponseType::Ok(data),
         }
@@ -547,5 +539,90 @@ impl Into<StatusCode> for &ErrorStatus {
             ErrorStatus::Conflict => StatusCode::CONFLICT,
             ErrorStatus::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use uuid::Uuid;
+
+    use crate::{FromID, FromRelationships, FromRequest, Identifier, IntoResponse, Relationship, RelationshipData, Request, ResourceRequest, ResourceResponse, Response};
+
+    // A simple request with no relationships
+    struct SimpleRequest {
+        id: Uuid,
+        attributes: SimpleAttributes,
+    }
+
+    #[derive(Clone)]
+    struct SimpleAttributes {
+        foo: String,
+        bar: Option<isize>,
+    }
+
+    impl FromRequest for SimpleRequest {
+        type Attributes = SimpleAttributes;
+
+        fn from_request(req: Request<Self::Attributes>) -> Result<Self, crate::Error> {
+            // ensure no relationships were passed (this implicitly has a "relationships" of unit struct)
+            FromRelationships::from_relationships(req.data.relationships)?;
+            Ok(SimpleRequest {
+                id: FromID::from_id(req.data.id.unwrap())?,
+                attributes: req.data.attributes,
+            })
+        }
+    }
+
+    #[test]
+    fn test_simple_request() {
+        let id = Uuid::new_v4();
+        let mut req = Request {
+            data: ResourceRequest {
+                id: Some(id.clone().into()),
+                typ: "simple".into(),
+                attributes: SimpleAttributes {
+                    foo: "testing".into(),
+                    bar: Some(123),
+                },
+                relationships: None,
+            },
+        };
+        assert!(SimpleRequest::from_request(req.clone()).is_ok());
+        req.data.id = Some("foobarbaz".into()); // invalid UUID format
+        assert!(SimpleRequest::from_request(req.clone()).is_err());
+        req.data.id = Some(id.clone().into());
+        let mut relations = BTreeMap::new();
+        relations.insert(
+            "fake".to_owned(),
+            RelationshipData {
+                data: Relationship::ToOne(Identifier {
+                    id: "test".into(),
+                    typ: "fake".into(),
+                }),
+            },
+        );
+        req.data.relationships = Some(relations);
+        assert!(SimpleRequest::from_request(req.clone()).is_err());
+    }
+
+    struct SimpleResponse {
+        id: Uuid,
+        attributes: SimpleAttributes,
+    }
+
+    impl IntoResponse for SimpleResponse {
+        type Attributes = SimpleAttributes;
+
+        fn into_response(self) -> ResourceResponse<Self::Attributes>{
+			ResourceResponse{
+				id: Identifier{
+					id: self.id.into(),
+					typ: "simple".into()
+				},
+				attributes: self.attributes,
+				relationships: None,
+			}
+		}
     }
 }

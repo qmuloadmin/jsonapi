@@ -41,7 +41,7 @@ struct RelationNames {
     is_option: bool,
 }
 
-#[proc_macro_derive(Responder, attributes(jsonapi))]
+#[proc_macro_derive(IntoResponse, attributes(jsonapi))]
 pub fn resource_macro_derive(input: TokenStream) -> TokenStream {
     let ast = syn::parse(input).unwrap();
     impl_responder_macro(&ast)
@@ -271,13 +271,13 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props = ResourceProps::from_derive_input(ast).unwrap();
     let desc = ResourceFieldDescription::from(props);
     let (relations_fn, relations_type) = match desc.relations_field.as_ref() {
-        None => (quote! { () }, quote! {()}),
+        None => (quote! { None }, quote! {()}),
         Some(field) => {
             let relations_name = field.ident.as_ref().unwrap();
             let field_type = &field.ty;
             (
                 quote! {
-                    self.#relations_name.clone()
+                    ::jsonapi::IntoRelationships::into_relationships(self.#relations_name)
                 },
                 quote! {
                     #field_type
@@ -292,7 +292,7 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
             let field_type = &field.ty;
             (
                 quote! {
-                    self.#attr_name.clone()
+                    self.#attr_name
                 },
                 quote! {
                     #field_type
@@ -303,27 +303,21 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let id_name = desc.id_field.unwrap().ident.unwrap();
     let name = desc.name;
     let type_name = desc.type_name;
-    // TODO find a way to remove the clone() of attributes
     let gen = quote! {
-        impl ::jsonapi::Responder for #name {
+        impl ::jsonapi::IntoResponse for #name {
             type Attributes = #attr_type;
-            type Relations = #relations_type;
 
-            fn name() -> String {
-                #type_name.to_owned().to_lowercase()
-            }
-
-            fn id(&self) -> ::jsonapi::ID {
-                ToString::to_string(&self.#id_name).into()
-            }
-
-            fn attributes(&self) -> #attr_type {
-                #attr_fn
-            }
-
-            fn relations(&self) -> #relations_type {
-                #relations_fn
-            }
+			fn into_response(self) -> ::jsonapi::ResourceResponse<Self::Attributes> {
+				let id = ::jsonapi::Identifier{
+					id: self.id.into(),
+					typ: #type_name.to_owned().to_lowercase()
+				};
+				::jsonapi::ResourceResponse{
+					id,
+					attributes: #attr_fn,
+					relationships: #relations_fn
+				}
+			}
         }
 
     };
