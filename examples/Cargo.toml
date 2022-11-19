@@ -6,7 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-jsonapi = { git = "https://github.com/qmuloadmin/jsonapi"}
+jsonapi = { path = "../"}
+serde = "1"
+serde_json = "1"
+serde_derive = "1"
 jsonapi_resource_derive = { git = "https://github.com/qmuloadmin/jsonapi" }
 
 [dependencies.uuid]

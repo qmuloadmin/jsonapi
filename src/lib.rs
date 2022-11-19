@@ -15,7 +15,7 @@ use serde_derive::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Display, ops, pin::Pin, task::Poll};
 use uuid::Uuid;
 
-// TODO: ALl the Deserialize derives should be broken out into a separate feature
+// TODO: All the Deserialize derives should be broken out into a separate feature
 // for clients as its a lot of code that doesn't need to exist for servers
 // check the commit associated with this comment to get a list of types
 // that don't need Deserialize for a server
@@ -176,10 +176,30 @@ pub struct Request<D> {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Response<D> {
+pub struct Response<P, I> {
     #[serde(flatten)]
-    pub primary: ResponseType<D>,
-    //	pub included: Option<Vec<ResourceResponse<I>>>,
+    pub primary: ResponseType<P>,
+	pub included: Option<Vec<ResourceResponse<I>>>,
+}
+
+impl<P, I> Response<P, I> where {
+	pub fn include<Ex>(mut self, resource: Ex) -> Self where Ex: IntoResponse<Attributes = I> {
+		if self.included.is_none() {
+			self.included = Some(vec![resource.into_response()])
+		} else {
+			self.included.as_mut().unwrap().push(resource.into_response())
+		}
+		self
+	}
+
+	pub fn include_many<Ex>(mut self, resources: Vec<Ex>) -> Self where Ex: IntoResponse<Attributes = I>{
+		if self.included.is_none() {
+			self.included = Some(resources.into_iter().map(|res| res.into_response()).collect())
+		} else {
+			self.included.as_mut().unwrap().append(&mut resources.into_iter().map(|res| res.into_response()).collect())
+		}
+		self
+	}
 }
 
 #[derive(Serialize, Deserialize)]
@@ -399,35 +419,39 @@ where
     }
 }
 
-impl<R: IntoResponse> From<R> for Response<R::Attributes> {
+impl<R: IntoResponse, I> From<R> for Response<R::Attributes, I> {
     fn from(r: R) -> Self {
         Response {
             primary: ResponseType::Ok(vec![r.into_response()]),
+			included: None
         }
     }
 }
 
-impl<R: IntoResponse> From<Vec<R>> for Response<R::Attributes> {
+impl<R: IntoResponse, I> From<Vec<R>> for Response<R::Attributes, I> {
     fn from(v: Vec<R>) -> Self {
         let data = v.into_iter().map(|each| each.into_response()).collect();
         Response {
             primary: ResponseType::Ok(data),
+			included: None
         }
     }
 }
 
-impl From<Error> for Response<()> {
+impl From<Error> for Response<(), ()> {
     fn from(e: Error) -> Self {
         Response {
             primary: ResponseType::Error(vec![e]),
+			included: None
         }
     }
 }
 
-impl From<Vec<Error>> for Response<()> {
+impl From<Vec<Error>> for Response<(), ()> {
     fn from(v: Vec<Error>) -> Self {
         Response {
             primary: ResponseType::Error(v),
+			included: None
         }
     }
 }

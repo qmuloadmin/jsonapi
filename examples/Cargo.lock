@@ -47,8 +47,11 @@ dependencies = [
 name = "examples"
 version = "0.1.0"
 dependencies = [
- "jsonapi",
+ "jsonapi 0.1.1",
  "jsonapi_resource_derive",
+ "serde",
+ "serde_derive",
+ "serde_json",
  "uuid",
 ]
 
@@ -89,8 +92,19 @@ checksum = "4217ad341ebadf8d8e724e264f13e593e0648f5b3e94b3896a5df283be015ecc"
 
 [[package]]
 name = "jsonapi"
-version = "0.1.0"
-source = "git+https://github.com/qmuloadmin/jsonapi#ed18bfb9fb90a5ad91832fa20ba72e861922495e"
+version = "0.1.1"
+dependencies = [
+ "futures-core",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "jsonapi"
+version = "0.1.1"
+source = "git+https://github.com/qmuloadmin/jsonapi#73f4321af0e400018cc737b07837400ec8c06549"
 dependencies = [
  "futures-core",
  "serde",
@@ -101,11 +115,11 @@ dependencies = [
 
 [[package]]
 name = "jsonapi_resource_derive"
-version = "0.1.0"
-source = "git+https://github.com/qmuloadmin/jsonapi#ed18bfb9fb90a5ad91832fa20ba72e861922495e"
+version = "0.1.1"
+source = "git+https://github.com/qmuloadmin/jsonapi#73f4321af0e400018cc737b07837400ec8c06549"
 dependencies = [
  "darling",
- "jsonapi",
+ "jsonapi 0.1.1 (git+https://github.com/qmuloadmin/jsonapi)",
  "proc-macro2",
  "quote",
  "syn",
