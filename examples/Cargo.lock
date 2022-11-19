@@ -104,7 +104,7 @@ dependencies = [
 [[package]]
 name = "jsonapi"
 version = "0.1.1"
-source = "git+https://github.com/qmuloadmin/jsonapi#73f4321af0e400018cc737b07837400ec8c06549"
+source = "git+https://github.com/qmuloadmin/jsonapi#d559d362eb4202e95d75184d10fd6034440f009f"
 dependencies = [
  "futures-core",
  "serde",
@@ -116,7 +116,6 @@ dependencies = [
 [[package]]
 name = "jsonapi_resource_derive"
 version = "0.1.1"
-source = "git+https://github.com/qmuloadmin/jsonapi#73f4321af0e400018cc737b07837400ec8c06549"
 dependencies = [
  "darling",
  "jsonapi 0.1.1 (git+https://github.com/qmuloadmin/jsonapi)",

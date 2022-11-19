@@ -1,17 +1,25 @@
 extern crate proc_macro;
 
-use darling::{ast, util, FromDeriveInput, FromField, FromMeta};
+use darling::{ast, util, FromDeriveInput, FromField, FromVariant, FromMeta};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TS2;
 use quote::quote;
 use syn::{self, Type};
 
 #[derive(FromDeriveInput)]
-#[darling(attributes(jsonapi), supports(struct_named))]
+#[darling(attributes(jsonapi), supports(struct_named, enum_any))]
 struct ResourceProps {
     ident: syn::Ident,
-    data: ast::Data<util::Ignored, ResourceField>,
+    data: ast::Data<ResourceVariant, ResourceField>,
     name: Option<String>,
+}
+
+#[derive(FromVariant, Clone)]
+#[darling(attributes(jsonapi))]
+struct ResourceVariant {
+    ident: syn::Ident,
+    fields: ast::Fields<()>,
+	attr_name: syn::Type
 }
 
 #[derive(FromField, Clone)]
@@ -206,11 +214,11 @@ fn impl_from_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
     let none_handler = if all_options {
         // TODO this isn't the most efficient approach in the world
         quote! {
-			let mut rels: ::std::collections::BTreeMap<String, ::jsonapi::RelationshipData> = match rels {
-				None => ::std::collections::BTreeMap::new(),
-				Some(b) => b
-			};
-		}
+            let mut rels: ::std::collections::BTreeMap<String, ::jsonapi::RelationshipData> = match rels {
+                None => ::std::collections::BTreeMap::new(),
+                Some(b) => b
+            };
+        }
     } else {
         quote! {
             let mut rels = rels.ok_or_else(|| ::jsonapi::Error::new_bad_request("missing mandatory relationships object"))?;
@@ -269,59 +277,104 @@ fn impl_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
 
 fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props = ResourceProps::from_derive_input(ast).unwrap();
-    let desc = ResourceFieldDescription::from(props);
-    let (relations_fn, relations_type) = match desc.relations_field.as_ref() {
-        None => (quote! { None }, quote! {()}),
-        Some(field) => {
-            let relations_name = field.ident.as_ref().unwrap();
-            let field_type = &field.ty;
-            (
-                quote! {
-                    ::jsonapi::IntoRelationships::into_relationships(self.#relations_name)
-                },
-                quote! {
-                    #field_type
-                },
-            )
-        }
-    };
-    let (attr_fn, attr_type) = match desc.attr_field {
-        None => (quote! { None }, quote! { Option<()> }),
-        Some(field) => {
-            let attr_name = field.ident.as_ref().unwrap();
-            let field_type = &field.ty;
-            (
-                quote! {
-                    self.#attr_name
-                },
-                quote! {
-                    #field_type
-                },
-            )
-        }
-    };
-    let id_name = desc.id_field.unwrap().ident.unwrap();
-    let name = desc.name;
-    let type_name = desc.type_name;
-    let gen = quote! {
-        impl ::jsonapi::IntoResponse for #name {
-            type Attributes = #attr_type;
-
-			fn into_response(self) -> ::jsonapi::ResourceResponse<Self::Attributes> {
-				let id = ::jsonapi::Identifier{
-					id: self.id.into(),
-					typ: #type_name.to_owned().to_lowercase()
-				};
-				::jsonapi::ResourceResponse{
-					id,
-					attributes: #attr_fn,
-					relationships: #relations_fn
+    if props.data.is_enum() {
+		let name = props.ident;
+		let attr_enum_name = Type::from_string(&format!("Jsonapi_{}IncludedAttrs", name.clone())).unwrap();
+		let variant_stmts: Vec<TS2> = props.data.clone().take_enum().unwrap().iter().map(|variant| {
+			let name = variant.ident.clone();
+			let attr = variant.attr_name.clone();
+			quote! {
+				#name(#attr),
+			}
+		}).collect();
+		let match_clauses: Vec<TS2> = props.data.take_enum().unwrap().into_iter().map(|variant| {
+			let name = variant.ident;
+			let attr = variant.attr_name;
+			quote! {
+				Self::#name (res) => {
+					let inner = ::jsonapi::IntoResponse::into_response(res);
+					::jsonapi::ResourceResponse {
+						id: inner.id,
+						attributes: #attr_enum_name :: # name (inner.attributes),
+						relationships: inner.relationships,
+					}
 				}
 			}
-        }
+		}).collect();	
+		let gen = quote! {
 
-    };
-    gen.into()
+			#[derive(Serialize)]
+			#[serde(untagged)]
+			enum #attr_enum_name {
+				#(#variant_stmts)*
+			}
+
+			impl ::jsonapi::IntoResponse for #name {
+				type Attributes = #attr_enum_name;
+				fn into_response(self) -> ::jsonapi::ResourceResponse<Self::Attributes> {
+					match self {
+						#(#match_clauses)*
+					}
+				}
+			}
+		};
+		gen.into()
+    } else {
+        let desc = ResourceFieldDescription::from(props);
+        let (relations_fn, relations_type) = match desc.relations_field.as_ref() {
+            None => (quote! { None }, quote! {()}),
+            Some(field) => {
+                let relations_name = field.ident.as_ref().unwrap();
+                let field_type = &field.ty;
+                (
+                    quote! {
+                        ::jsonapi::IntoRelationships::into_relationships(self.#relations_name)
+
+                    },
+                    quote! {
+                        #field_type
+                    },
+                )
+            }
+        };
+        let (attr_fn, attr_type) = match desc.attr_field {
+            None => (quote! { None }, quote! { Option<()> }),
+            Some(field) => {
+                let attr_name = field.ident.as_ref().unwrap();
+                let field_type = &field.ty;
+                (
+                    quote! {
+                        self.#attr_name
+                    },
+                    quote! {
+                        #field_type
+                    },
+                )
+            }
+        };
+        let id_name = desc.id_field.unwrap().ident.unwrap();
+        let name = desc.name;
+        let type_name = desc.type_name;
+        let gen = quote! {
+            impl ::jsonapi::IntoResponse for #name {
+                type Attributes = #attr_type;
+
+                fn into_response(self) -> ::jsonapi::ResourceResponse<Self::Attributes> {
+                    let id = ::jsonapi::Identifier{
+                        id: self.id.into(),
+                        typ: #type_name.to_owned().to_lowercase()
+                    };
+                    ::jsonapi::ResourceResponse{
+                        id,
+                        attributes: #attr_fn,
+                        relationships: #relations_fn
+                    }
+                }
+            }
+
+        };
+        gen.into()
+    }
 }
 
 struct ResourceFieldDescription {
