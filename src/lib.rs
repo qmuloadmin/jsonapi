@@ -27,6 +27,15 @@ pub struct ResourceResponse<D> {
     pub relationships: Option<BTreeMap<String, RelationshipData>>,
 }
 
+pub trait Resource {
+    type Attributes;
+    type Relations;
+
+    fn type_name() -> &'static str;
+
+    fn into_response(self) -> Response<Self::Attributes, Self::Relations>;
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum Relationship {
@@ -179,27 +188,52 @@ pub struct Request<D> {
 pub struct Response<P, I> {
     #[serde(flatten)]
     pub primary: ResponseType<P>,
-	pub included: Option<Vec<ResourceResponse<I>>>,
+    pub included: Option<Vec<ResourceResponse<I>>>,
 }
 
-impl<P, I> Response<P, I> where {
-	pub fn include<Ex>(mut self, resource: Ex) -> Self where Ex: IntoResponse<Attributes = I> {
-		if self.included.is_none() {
-			self.included = Some(vec![resource.into_response()])
-		} else {
-			self.included.as_mut().unwrap().push(resource.into_response())
-		}
-		self
-	}
+impl<P, I> Response<P, I> {
+    pub fn include<Ex>(mut self, resource: Ex) -> Self
+    where
+        Ex: IntoResponse<Attributes = I>,
+    {
+        if self.included.is_none() {
+            self.included = Some(vec![resource.into_response()])
+        } else {
+            self.included
+                .as_mut()
+                .unwrap()
+                .push(resource.into_response())
+        }
+        self
+    }
 
-	pub fn include_many<Ex>(mut self, resources: Vec<Ex>) -> Self where Ex: IntoResponse<Attributes = I>{
-		if self.included.is_none() {
-			self.included = Some(resources.into_iter().map(|res| res.into_response()).collect())
-		} else {
-			self.included.as_mut().unwrap().append(&mut resources.into_iter().map(|res| res.into_response()).collect())
-		}
-		self
-	}
+    pub fn include_many<Ex>(mut self, resources: Vec<Ex>) -> Self
+    where
+        Ex: IntoResponse<Attributes = I>,
+    {
+        if self.included.is_none() {
+            self.included = Some(
+                resources
+                    .into_iter()
+                    .map(|res| res.into_response())
+                    .collect(),
+            )
+        } else {
+            self.included.as_mut().unwrap().append(
+                &mut resources
+                    .into_iter()
+                    .map(|res| res.into_response())
+                    .collect(),
+            )
+        }
+        self
+    }
+}
+
+impl<P> Response<P, Option<()>> {
+    pub fn finish(self) -> Self {
+        self
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -423,7 +457,7 @@ impl<R: IntoResponse, I> From<R> for Response<R::Attributes, I> {
     fn from(r: R) -> Self {
         Response {
             primary: ResponseType::Ok(vec![r.into_response()]),
-			included: None
+            included: None,
         }
     }
 }
@@ -433,7 +467,7 @@ impl<R: IntoResponse, I> From<Vec<R>> for Response<R::Attributes, I> {
         let data = v.into_iter().map(|each| each.into_response()).collect();
         Response {
             primary: ResponseType::Ok(data),
-			included: None
+            included: None,
         }
     }
 }
@@ -442,7 +476,7 @@ impl From<Error> for Response<(), ()> {
     fn from(e: Error) -> Self {
         Response {
             primary: ResponseType::Error(vec![e]),
-			included: None
+            included: None,
         }
     }
 }
@@ -451,7 +485,7 @@ impl From<Vec<Error>> for Response<(), ()> {
     fn from(v: Vec<Error>) -> Self {
         Response {
             primary: ResponseType::Error(v),
-			included: None
+            included: None,
         }
     }
 }
@@ -571,7 +605,10 @@ mod tests {
     use std::collections::BTreeMap;
     use uuid::Uuid;
 
-    use crate::{FromID, FromRelationships, FromRequest, Identifier, IntoResponse, Relationship, RelationshipData, Request, ResourceRequest, ResourceResponse, Response};
+    use crate::{
+        FromID, FromRelationships, FromRequest, Identifier, IntoResponse, Relationship,
+        RelationshipData, Request, ResourceRequest, ResourceResponse, Response,
+    };
 
     // A simple request with no relationships
     struct SimpleRequest {
@@ -638,15 +675,33 @@ mod tests {
     impl IntoResponse for SimpleResponse {
         type Attributes = SimpleAttributes;
 
-        fn into_response(self) -> ResourceResponse<Self::Attributes>{
-			ResourceResponse{
-				id: Identifier{
-					id: self.id.into(),
-					typ: "simple".into()
-				},
-				attributes: self.attributes,
-				relationships: None,
-			}
-		}
+        fn into_response(self) -> ResourceResponse<Self::Attributes> {
+            ResourceResponse {
+                id: Identifier {
+                    id: self.id.into(),
+                    typ: "simple".into(),
+                },
+                attributes: self.attributes,
+                relationships: None,
+            }
+        }
+    }
+
+    #[test]
+    fn test_simple_response() {
+        let attrs = SimpleAttributes {
+            foo: "foo".into(),
+            bar: None,
+        };
+        let id = Uuid::new_v4();
+        let response = SimpleResponse {
+            id,
+            attributes: attrs,
+        };
+        // finish with no included resources.
+        // finish is essentially a more readable way to provided types for responses
+        // with no included resources. There is likely a better way to do this but for
+        // now this is the approach we're taking.
+        Response::from(response).finish();
     }
 }
