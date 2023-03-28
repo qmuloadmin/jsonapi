@@ -1,24 +1,23 @@
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 use actix_web::{
     error::JsonPayloadError,
     http::StatusCode,
     web::{Json, JsonBody},
     FromRequest as FromWebRequest, HttpResponse, HttpResponseBuilder, ResponseError,
 };
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 use core::future::Future;
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 use futures_core::ready;
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt::Display, ops, pin::Pin, task::Poll};
+use std::{collections::BTreeMap, fmt::Display, ops};
+#[cfg(feature = "actixweb")]
+use std::{pin::Pin, task::Poll};
+#[cfg(feature = "server")]
 use uuid::Uuid;
 
-// TODO: All the Deserialize derives should be broken out into a separate feature
-// for clients as its a lot of code that doesn't need to exist for servers
-// check the commit associated with this comment to get a list of types
-// that don't need Deserialize for a server
 #[derive(Serialize, Deserialize)]
 pub struct ResourceResponse<D> {
     #[serde(flatten)]
@@ -52,6 +51,7 @@ impl Into<RelationshipData> for Relationship {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct ID(pub String);
 
+#[cfg(feature = "server")]
 impl From<Uuid> for ID {
     fn from(id: Uuid) -> ID {
         ID(id.to_string())
@@ -125,6 +125,7 @@ impl FromID for isize {
     }
 }
 
+#[cfg(feature = "server")]
 impl FromID for Uuid {
     fn from_id(id: ID) -> Result<Self, Error> {
         Uuid::parse_str(&id.0).map_err(|err| {
@@ -154,7 +155,7 @@ pub struct Identifier {
     pub typ: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ResourceRequest<D> {
     pub id: Option<ID>,
     #[serde(rename = "type")]
@@ -179,7 +180,7 @@ impl<T: Clone> Clone for Request<T> {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Request<D> {
     pub data: ResourceRequest<D>,
 }
@@ -490,7 +491,7 @@ impl From<Vec<Error>> for Response<(), ()> {
     }
 }
 
-// Stuff that should be moved into a jsonapi-actix-web crate at a later date
+// Stuff that should be moved into a jsonapi-actixweb crate at a later date
 pub struct JsonApi<R>(R);
 
 impl<R> JsonApi<R> {
@@ -507,7 +508,7 @@ impl<R> ops::Deref for JsonApi<R> {
     }
 }
 
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 impl<R: FromRequest> FromWebRequest for JsonApi<R>
 where
     R::Attributes: DeserializeOwned,
@@ -526,19 +527,19 @@ where
     }
 }
 
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 pub struct JsonApiExtractFut<T: FromRequest> {
     fut: JsonBody<Request<T::Attributes>>,
 }
 
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 impl From<JsonPayloadError> for Error {
     fn from(err: JsonPayloadError) -> Error {
         Error::new_bad_request(&err.to_string())
     }
 }
 
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 impl<T: FromRequest> Future for JsonApiExtractFut<T>
 where
     T::Attributes: DeserializeOwned,
@@ -568,7 +569,7 @@ where
     }
 }
 
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 impl ResponseError for Error {
     fn status_code(&self) -> StatusCode {
         (&self.status).into()
@@ -579,14 +580,14 @@ impl ResponseError for Error {
     }
 }
 
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 impl Into<HttpResponse> for Error {
     fn into(self) -> HttpResponse {
         HttpResponseBuilder::new(self.status_code()).json(Response::from(self))
     }
 }
 
-#[cfg(feature = "actix-web")]
+#[cfg(feature = "actixweb")]
 impl Into<StatusCode> for &ErrorStatus {
     fn into(self) -> StatusCode {
         match self {
