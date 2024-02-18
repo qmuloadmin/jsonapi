@@ -1,6 +1,6 @@
 extern crate proc_macro;
 
-use darling::{ast, util, FromDeriveInput, FromField, FromVariant, FromMeta};
+use darling::{ast, util, FromDeriveInput, FromField, FromMeta, FromVariant};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TS2;
 use quote::quote;
@@ -19,7 +19,7 @@ struct ResourceProps {
 struct ResourceVariant {
     ident: syn::Ident,
     fields: ast::Fields<()>,
-	attr_name: syn::Type
+    attr_name: syn::Type,
 }
 
 #[derive(FromField, Clone)]
@@ -36,9 +36,10 @@ struct RelationsProps {
 }
 
 #[derive(FromField, Clone)]
+#[darling(attributes(jsonapi))]
 struct RelationsField {
     ident: Option<syn::Ident>,
-    name: Option<String>,
+    resource_type: Option<String>,
     ty: syn::Type,
 }
 
@@ -278,47 +279,61 @@ fn impl_relations_macro(ast: &syn::DeriveInput) -> TokenStream {
 fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props = ResourceProps::from_derive_input(ast).unwrap();
     if props.data.is_enum() {
-		let name = props.ident;
-		let attr_enum_name = Type::from_string(&format!("Jsonapi_{}IncludedAttrs", name.clone())).unwrap();
-		let variant_stmts: Vec<TS2> = props.data.clone().take_enum().unwrap().iter().map(|variant| {
-			let name = variant.ident.clone();
-			let attr = variant.attr_name.clone();
-			quote! {
-				#name(#attr),
-			}
-		}).collect();
-		let match_clauses: Vec<TS2> = props.data.take_enum().unwrap().into_iter().map(|variant| {
-			let name = variant.ident;
-			let attr = variant.attr_name;
-			quote! {
-				Self::#name (res) => {
-					let inner = ::jsonapi::IntoResponse::into_response(res);
-					::jsonapi::ResourceResponse {
-						id: inner.id,
-						attributes: #attr_enum_name :: # name (inner.attributes),
-						relationships: inner.relationships,
-					}
-				}
-			}
-		}).collect();	
-		let gen = quote! {
+        let name = props.ident;
+        let attr_enum_name =
+            Type::from_string(&format!("Jsonapi_{}IncludedAttrs", name.clone())).unwrap();
+        let variant_stmts: Vec<TS2> = props
+            .data
+            .clone()
+            .take_enum()
+            .unwrap()
+            .iter()
+            .map(|variant| {
+                let name = variant.ident.clone();
+                let attr = variant.attr_name.clone();
+                quote! {
+                    #name(#attr),
+                }
+            })
+            .collect();
+        let match_clauses: Vec<TS2> = props
+            .data
+            .take_enum()
+            .unwrap()
+            .into_iter()
+            .map(|variant| {
+                let name = variant.ident;
+                let attr = variant.attr_name;
+                quote! {
+                    Self::#name (res) => {
+                        let inner = ::jsonapi::IntoResponse::into_response(res);
+                        ::jsonapi::ResourceResponse {
+                            id: inner.id,
+                            attributes: #attr_enum_name :: # name (inner.attributes),
+                            relationships: inner.relationships,
+                        }
+                    }
+                }
+            })
+            .collect();
+        let gen = quote! {
 
-			#[derive(Serialize)]
-			#[serde(untagged)]
-			enum #attr_enum_name {
-				#(#variant_stmts)*
-			}
+            #[derive(Serialize)]
+            #[serde(untagged)]
+            enum #attr_enum_name {
+                #(#variant_stmts)*
+            }
 
-			impl ::jsonapi::IntoResponse for #name {
-				type Attributes = #attr_enum_name;
-				fn into_response(self) -> ::jsonapi::ResourceResponse<Self::Attributes> {
-					match self {
-						#(#match_clauses)*
-					}
-				}
-			}
-		};
-		gen.into()
+            impl ::jsonapi::IntoResponse for #name {
+                type Attributes = #attr_enum_name;
+                fn into_response(self) -> ::jsonapi::ResourceResponse<Self::Attributes> {
+                    match self {
+                        #(#match_clauses)*
+                    }
+                }
+            }
+        };
+        gen.into()
     } else {
         let desc = ResourceFieldDescription::from(props);
         let (relations_fn, relations_type) = match desc.relations_field.as_ref() {
@@ -398,7 +413,7 @@ impl From<RelationsProps> for RelationFieldDescription {
                     .fields
                     .into_iter()
                     .map(|field| {
-                        let resource_name = match field.name {
+                        let resource_name = match field.resource_type {
                             Some(name) => name,
                             None => format!("{}s", field.ident.clone().unwrap()),
                         };
