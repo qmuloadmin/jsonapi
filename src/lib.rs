@@ -286,6 +286,8 @@ impl std::fmt::Display for Error {
     }
 }
 
+impl std::error::Error for Error {}
+
 impl Error {
     pub fn new_not_found(title: &str) -> Self {
         Error {
