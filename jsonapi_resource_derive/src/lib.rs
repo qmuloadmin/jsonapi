@@ -311,6 +311,7 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
                             id: inner.id,
                             attributes: #attr_enum_name :: # name (inner.attributes),
                             relationships: inner.relationships,
+                            meta: inner.meta,
                         }
                     }
                 }
@@ -382,7 +383,8 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
                     ::jsonapi::ResourceResponse{
                         id,
                         attributes: #attr_fn,
-                        relationships: #relations_fn
+                        relationships: #relations_fn,
+                        meta: None
                     }
                 }
             }

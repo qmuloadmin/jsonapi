@@ -13,6 +13,10 @@ use futures_core::ready;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Display, ops};
+
+/// Profile URI for the JSON:API cursor-based pagination profile.
+pub const CURSOR_PAGINATION_PROFILE: &str =
+    "http://jsonapi.org/profiles/ethanresnick/cursor-pagination/";
 #[cfg(feature = "actixweb")]
 use std::{pin::Pin, task::Poll};
 #[cfg(feature = "server")]
@@ -24,6 +28,8 @@ pub struct ResourceResponse<D> {
     pub id: Identifier,
     pub attributes: D,
     pub relationships: Option<BTreeMap<String, RelationshipData>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<ResourceMeta>,
 }
 
 pub trait Resource {
@@ -185,14 +191,74 @@ pub struct Request<D> {
     pub data: ResourceRequest<D>,
 }
 
+/// Pagination links for cursor-based pagination.
+///
+/// `prev` and `next` are required by the profile but may be `None` (serialized as `null`)
+/// when there is no previous or next page. `first` and `last` are optional.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PaginationLinks {
+    pub prev: Option<String>,
+    pub next: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last: Option<String>,
+}
+
+/// Estimated total count with a best-guess value.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EstimatedTotal {
+    #[serde(rename = "bestGuess")]
+    pub best_guess: usize,
+}
+
+/// Page-level metadata for cursor-based pagination, placed at `meta.page` in the response.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PageMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "estimatedTotal")]
+    pub estimated_total: Option<EstimatedTotal>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "rangeTruncated")]
+    pub range_truncated: Option<bool>,
+}
+
+/// Top-level `meta` object wrapping the `page` pagination metadata.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ResponseMeta {
+    pub page: PageMeta,
+}
+
+/// Per-item pagination metadata containing the cursor for a single resource.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ItemPageMeta {
+    pub cursor: String,
+}
+
+/// Per-item `meta` object wrapping cursor pagination info.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ResourceMeta {
+    pub page: ItemPageMeta,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Response<P, I> {
     #[serde(flatten)]
     pub primary: ResponseType<P>,
     pub included: Option<Vec<ResourceResponse<I>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub links: Option<PaginationLinks>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<ResponseMeta>,
 }
 
 impl<P, I> Response<P, I> {
+    pub fn paginate(mut self, links: PaginationLinks, meta: Option<ResponseMeta>) -> Self {
+        self.links = Some(links);
+        self.meta = meta;
+        self
+    }
+
     pub fn include<Ex>(mut self, resource: Ex) -> Self
     where
         Ex: IntoResponse<Attributes = I>,
@@ -461,6 +527,8 @@ impl<R: IntoResponse, I> From<R> for Response<R::Attributes, I> {
         Response {
             primary: ResponseType::Ok(vec![r.into_response()]),
             included: None,
+            links: None,
+            meta: None,
         }
     }
 }
@@ -471,6 +539,8 @@ impl<R: IntoResponse, I> From<Vec<R>> for Response<R::Attributes, I> {
         Response {
             primary: ResponseType::Ok(data),
             included: None,
+            links: None,
+            meta: None,
         }
     }
 }
@@ -480,6 +550,8 @@ impl From<Error> for Response<(), ()> {
         Response {
             primary: ResponseType::Error(vec![e]),
             included: None,
+            links: None,
+            meta: None,
         }
     }
 }
@@ -489,6 +561,8 @@ impl From<Vec<Error>> for Response<(), ()> {
         Response {
             primary: ResponseType::Error(v),
             included: None,
+            links: None,
+            meta: None,
         }
     }
 }
@@ -630,7 +704,7 @@ mod tests {
 
         fn from_request(req: Request<Self::Attributes>) -> Result<Self, crate::Error> {
             // ensure no relationships were passed (this implicitly has a "relationships" of unit struct)
-            FromRelationships::from_relationships(req.data.relationships)?;
+            <() as FromRelationships>::from_relationships(req.data.relationships)?;
             Ok(SimpleRequest {
                 id: FromID::from_id(req.data.id.unwrap())?,
                 attributes: req.data.attributes,
@@ -686,6 +760,7 @@ mod tests {
                 },
                 attributes: self.attributes,
                 relationships: None,
+                meta: None,
             }
         }
     }
@@ -702,7 +777,7 @@ mod tests {
             attributes: attrs,
         };
         // finish with no included resources.
-        // finish is essentially a more readable way to provided types for responses
+        // finish is essentially a more readable way to provide types for responses
         // with no included resources. There is likely a better way to do this but for
         // now this is the approach we're taking.
         Response::from(response).finish();
