@@ -1,4 +1,4 @@
-mod actix;
+pub mod actix;
 pub mod auth;
 mod document;
 mod error;
@@ -11,7 +11,7 @@ pub use query::*;
 pub use resource::*;
 
 #[cfg(feature = "actixweb")]
-pub use actix::extract::{JsonApi, JsonApiExtractFut};
+pub use actix::extract::{JsonApi, JsonApiExtractFut, MEDIA_TYPE};
 
 #[cfg(test)]
 mod tests {

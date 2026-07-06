@@ -7,49 +7,6 @@ use std::future::{ready, Future, Ready};
 use std::pin::Pin;
 use std::rc::Rc;
 
-pub enum PaginationCursorParameters {
-    Before(String),
-    After(String),
-}
-
-pub struct PaginationParameters {
-    pub size: Option<i64>,
-    pub cursor: Option<PaginationCursorParameters>,
-}
-
-pub struct RequestParameters<Filters> {
-    pub pagination: PaginationParameters,
-    pub filters: Filters,
-}
-
-pub type ResourceAuthorizationFuture<Resource> = Result<Resource, crate::Error>;
-
-/// ResourceAuthorizors are used to perform final authorization of a resource after
-/// retrieval. Less efficient, but more standard for object-level authorization in a
-/// REST API system.
-pub trait ResourceAuthorizor<Res: Send> {
-    fn authorize_resource(&mut self, resource: Res) -> impl std::future::Future<Output=ResourceAuthorizationFuture<Res>> + Send;
-}
-
-/// A simple, authorize-everything Authorizor for tests and PoCs
-pub struct NopResourceAuthorizor {}
-
-impl<Any: crate::Resource + Send> ResourceAuthorizor<Any> for NopResourceAuthorizor {
-    async fn authorize_resource(&mut self, resource: Any) -> ResourceAuthorizationFuture<Any> {
-        Ok(resource)
-    }
-}
-
-/// Automatically implements JSON-API standards-compliant endpoints for "repository pattern"
-/// endpoints -- CRUD (FindById, Find (filter), Create, Delete, Update)
-/// All methods have a default implementation to disable those endpoints.
-pub trait ResourceServer<Res: Send> {
-    type SessionFactory: UserSessionFactory;
-    type Authorizor: ResourceAuthorizor<Res>;
-
-    fn find_by_id();
-}
-
 /// A factory trait for extracting a per-request user session from an actix-web
 /// `ServiceRequest`. This is a deliberately stripped-down alternative to wiring up
 /// `actix_web::dev::Transform` + `Service` by hand: implementors provide a single

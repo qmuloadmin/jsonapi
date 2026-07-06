@@ -2,16 +2,23 @@ use std::collections::BTreeMap;
 #[cfg(feature = "server")]
 use uuid::Uuid;
 
-use crate::document::{Identifier, Relationship, RelationshipData, Request, ResourceResponse, Response, ID};
+use crate::document::{Identifier, Relationship, RelationshipData, Request, ResourceResponse, ID};
 use crate::error::Error;
 
-pub trait Resource {
-    type Attributes;
-    type Relations;
-
-    fn type_name() -> &'static str;
-
-    fn into_response(self) -> Response<Self::Attributes, Self::Relations>;
+/// Identity of a JSON:API resource type: its wire type name and id type.
+///
+/// This is the crate's central piece of vocabulary for the actix-web
+/// integration: [`crate::actix::Store`] and its capability traits
+/// (`Show`/`List`/`Create`/`Update`/`Delete`) are all generic over a
+/// `Resource: ResourceType`, and the route mounting in
+/// [`crate::actix::resource`] uses `TYPE_NAME` to derive the scope path and
+/// `Id` to parse the `/{id}` path segment.
+pub trait ResourceType {
+    /// The JSON:API `type` string, plural by convention (e.g. "designs").
+    /// Also the route segment resources are mounted under: `/{TYPE_NAME}/`.
+    const TYPE_NAME: &'static str;
+    /// The typed id this resource's `/{id}` path segment parses into.
+    type Id: FromID;
 }
 
 pub trait FromID

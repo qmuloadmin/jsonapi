@@ -1,12 +1,15 @@
 use actix_web::{
+    body::BoxBody,
     error::JsonPayloadError,
     http::StatusCode,
     web::{Json, JsonBody},
-    FromRequest as FromWebRequest, HttpResponse, HttpResponseBuilder, ResponseError,
+    FromRequest as FromWebRequest, HttpRequest, HttpResponse, HttpResponseBuilder, Responder,
+    ResponseError,
 };
 use core::future::Future;
 use futures_core::ready;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::ops;
 use std::{pin::Pin, task::Poll};
 
@@ -14,7 +17,12 @@ use crate::document::{Request, Response};
 use crate::error::{Error, ErrorStatus};
 use crate::resource::FromRequest;
 
-// Stuff that should be moved into a jsonapi-actixweb crate at a later date
+/// The JSON:API media type, used as the `Content-Type` for every response
+/// this crate renders (documents and error documents alike).
+pub const MEDIA_TYPE: &str = "application/vnd.api+json";
+
+/// Actix-web body extractor for JSON:API request documents: deserializes the
+/// payload as a [`Request`] and converts it into `R` via [`FromRequest`].
 pub struct JsonApi<R>(R);
 
 impl<R> JsonApi<R> {
@@ -88,19 +96,52 @@ where
     }
 }
 
+/// Serialize an error document, falling back to a plain-text 500 body if
+/// serialization itself somehow fails (it shouldn't, but this keeps the error
+/// path panic-free).
+pub(crate) fn error_document_response(status: StatusCode, response: &Response<(), ()>) -> HttpResponse<BoxBody> {
+    match serde_json::to_string(response) {
+        Ok(body) => HttpResponseBuilder::new(status)
+            .content_type(MEDIA_TYPE)
+            .body(body),
+        Err(_) => HttpResponseBuilder::new(StatusCode::INTERNAL_SERVER_ERROR)
+            .content_type("text/plain; charset=utf-8")
+            .body("failed to serialize error document"),
+    }
+}
+
 impl ResponseError for Error {
     fn status_code(&self) -> StatusCode {
         (&self.status).into()
     }
 
     fn error_response(&self) -> HttpResponse<actix_web::body::BoxBody> {
-        HttpResponseBuilder::new(self.status_code()).json(Response::from(self.clone()))
+        error_document_response(self.status_code(), &Response::from(self.clone()))
     }
 }
 
 impl Into<HttpResponse> for Error {
     fn into(self) -> HttpResponse {
-        HttpResponseBuilder::new(self.status_code()).json(Response::from(self))
+        let status = self.status_code();
+        error_document_response(status, &Response::from(self))
+    }
+}
+
+impl<P: Serialize, I: Serialize> Responder for Response<P, I> {
+    type Body = BoxBody;
+
+    fn respond_to(self, _req: &HttpRequest) -> HttpResponse<BoxBody> {
+        match serde_json::to_string(&self) {
+            Ok(body) => HttpResponseBuilder::new(StatusCode::OK)
+                .content_type(MEDIA_TYPE)
+                .body(body),
+            Err(_) => error_document_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &Response::from(Error::new_internal_error(
+                    "failed to serialize response document",
+                )),
+            ),
+        }
     }
 }
 
