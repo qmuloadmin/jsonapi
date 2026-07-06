@@ -71,6 +71,11 @@ pub fn from_request_macro_derive(input: TokenStream) -> TokenStream {
     impl_from_request_macro(&syn::parse(input).unwrap())
 }
 
+#[proc_macro_derive(ResourceType, attributes(jsonapi))]
+pub fn resource_type_macro_derive(input: TokenStream) -> TokenStream {
+    impl_resource_type_macro(&syn::parse(input).unwrap())
+}
+
 fn impl_from_request_macro(ast: &syn::DeriveInput) -> TokenStream {
     let desc = ResourceFieldDescription::from(ResourceProps::from_derive_input(ast).unwrap());
     let missing_id_err = format!(
@@ -161,6 +166,36 @@ fn impl_from_request_macro(ast: &syn::DeriveInput) -> TokenStream {
                 };
                 Ok(result)
             }
+        }
+    };
+    gen.into()
+}
+
+fn impl_resource_type_macro(ast: &syn::DeriveInput) -> TokenStream {
+    let props = ResourceProps::from_derive_input(ast).unwrap();
+    let desc = ResourceFieldDescription::from(props);
+    let name = desc.name;
+    // NOTE: ResourceFieldDescription::type_name mirrors the default/custom
+    // name computation used by `IntoResponse`'s derive (`format!("{}s",
+    // name)` or the `#[jsonapi(name = "...")]` override), but that runtime
+    // path lowercases at `into_response` time (`.to_owned().to_lowercase()`).
+    // TYPE_NAME is a const, so we must lowercase here, at macro-expansion
+    // time, to agree with `IntoResponse` on the same wire type name.
+    let type_name = desc.type_name.to_lowercase();
+    let id_ty = match desc.id_field {
+        Some(field) => field.ty,
+        None => {
+            let msg = format!(
+                "deriving ResourceType for {} requires an `id` field",
+                name
+            );
+            return quote! { compile_error!(#msg); }.into();
+        }
+    };
+    let gen = quote! {
+        impl ::jsonapi::ResourceType for #name {
+            const TYPE_NAME: &'static str = #type_name;
+            type Id = #id_ty;
         }
     };
     gen.into()

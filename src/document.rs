@@ -33,7 +33,7 @@ impl Into<RelationshipData> for Relationship {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ID(pub String);
 
 #[cfg(feature = "server")]
@@ -73,11 +73,6 @@ impl Display for ID {
     }
 }
 
-impl Ord for ID {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.cmp(&other.0)
-    }
-}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RelationshipData {

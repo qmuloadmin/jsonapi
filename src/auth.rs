@@ -171,7 +171,7 @@ mod tests {
     use super::*;
     use actix_web::http::StatusCode;
     use actix_web::test::{call_service, init_service, read_body, read_body_json, TestRequest};
-    use actix_web::{get, App, HttpRequest, HttpResponse};
+    use actix_web::{get, App, HttpResponse};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 

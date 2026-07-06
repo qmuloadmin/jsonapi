@@ -2,11 +2,16 @@ pub mod actix;
 pub mod auth;
 mod document;
 mod error;
+mod mapping;
 mod query;
 mod resource;
 
+#[cfg(feature = "diesel")]
+mod diesel_support;
+
 pub use document::*;
 pub use error::*;
+pub use mapping::*;
 pub use query::*;
 pub use resource::*;
 
