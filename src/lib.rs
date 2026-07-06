@@ -21,6 +21,7 @@ pub const CURSOR_PAGINATION_PROFILE: &str =
 use std::{pin::Pin, task::Poll};
 #[cfg(feature = "server")]
 use uuid::Uuid;
+pub mod auth;
 
 #[derive(Serialize, Deserialize)]
 pub struct ResourceResponse<D> {
