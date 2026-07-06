@@ -2,10 +2,12 @@ mod actix;
 pub mod auth;
 mod document;
 mod error;
+mod query;
 mod resource;
 
 pub use document::*;
 pub use error::*;
+pub use query::*;
 pub use resource::*;
 
 #[cfg(feature = "actixweb")]

@@ -225,6 +225,25 @@ impl<P, I> Response<P, I> {
         }
         self
     }
+
+    /// Stamp each primary-data item's per-item pagination meta (`meta.page.cursor`)
+    /// using the given function. No-op on error responses.
+    pub fn with_item_cursors(mut self, f: impl Fn(&ResourceResponse<P>) -> String) -> Self {
+        if let ResponseType::Ok(ref mut items) = self.primary {
+            for item in items.iter_mut() {
+                let cursor = f(item);
+                item.meta = Some(ResourceMeta {
+                    page: ItemPageMeta { cursor },
+                });
+            }
+        }
+        self
+    }
+
+    /// Default cursor: the item's resource id.
+    pub fn with_id_cursors(self) -> Self {
+        self.with_item_cursors(|item| item.id.id.0.clone())
+    }
 }
 
 impl<P> Response<P, Option<()>> {
