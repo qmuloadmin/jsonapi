@@ -1,3 +1,20 @@
+//! Serde types for JSON:API documents, plus (optionally) a deep actix-web
+//! integration that turns a resource definition and a hand-written store
+//! into spec-compliant CRUD endpoints.
+//!
+//! Core vocabulary, feature-independent: [`Request`]/[`Response`] (the
+//! document types), [`ResourceType`]/[`IntoResponse`]/[`FromRequest`] (the
+//! traits a resource implements, usually via the derive macros in
+//! `jsonapi_resource_derive`), plus pagination/sort/filter/include parsing
+//! ([`PageParams`], [`CursorPage`], [`SortSpec`], [`IncludeSet`], ...).
+//!
+//! With the `actixweb` feature: [`actix::resource`] mounts a store's
+//! capability traits (`Show`/`List`/`Create`/`Update`/`Delete`, in
+//! [`actix::ops`]) as routes, and [`auth`] provides session middleware
+//! (`UserSessionMiddleware`) plus the `Session<T>` extractor that plumbs a
+//! typed session into every store method. See `DESIGN.md` for the full
+//! rationale and `examples/` for a runnable end-to-end server.
+
 pub mod actix;
 pub mod auth;
 mod document;

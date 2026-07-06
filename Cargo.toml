@@ -2,6 +2,12 @@
 name = "jsonapi"
 version = "0.2.0"
 edition = "2021"
+# `examples/` is a standalone crate (its own Cargo.toml), not a set of cargo
+# example targets for this package. Without this, `examples/src/main.rs`
+# would be auto-discovered as an example binary named "src" of this crate
+# (cargo's `examples/<name>/main.rs` convention) and built/tested as part of
+# this crate's own `cargo test`/`cargo build`.
+autoexamples = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
