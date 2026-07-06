@@ -92,6 +92,54 @@ pub trait UserSessionFactory: 'static {
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Session, crate::Error>;
 }
 
+/// Extractor recovering the session stored by [`UserSessionMiddleware`] from the
+/// request extensions. `T` is the [`UserSessionFactory::Session`] type. Handlers
+/// simply take `Session<MySession>` as an argument:
+///
+/// ```ignore
+/// async fn whoami(sess: Session<MySession>) -> HttpResponse {
+///     HttpResponse::Ok().body(sess.user_id.clone())
+/// }
+/// ```
+///
+/// If the middleware was not installed on the route (so no session of type `T`
+/// exists in the extensions), extraction fails with a 500 JSON:API error rather
+/// than a 401: a missing session at this point is a server wiring bug, not a
+/// client authentication failure (the middleware itself rejects unauthenticated
+/// requests before the handler runs).
+pub struct Session<T>(pub T);
+
+impl<T> Session<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> std::ops::Deref for Session<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: Clone + 'static> actix_web::FromRequest for Session<T> {
+    type Error = crate::Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(
+        req: &actix_web::HttpRequest,
+        _: &mut actix_web::dev::Payload,
+    ) -> Self::Future {
+        ready(match req.extensions().get::<T>().cloned() {
+            Some(session) => Ok(Session(session)),
+            None => Err(crate::Error::new_internal_error(
+                "session middleware was not installed on this route",
+            )),
+        })
+    }
+}
+
 /// Actix-web middleware factory wrapping a [`UserSessionFactory`]. Pass to
 /// `.wrap()` on an `App` or `Scope`. The factory is shared (via `Rc`) across all
 /// requests handled by a single worker.
@@ -198,29 +246,9 @@ mod tests {
         }
     }
 
-    // A representative FromRequest impl pulling the session back out of the request
-    // extensions. This is the boilerplate downstream consumers will write once per
-    // session type to make handlers like `async fn(sess: Session) -> ...` work.
-    struct InjectedSession(TestSession);
-
-    impl actix_web::FromRequest for InjectedSession {
-        type Error = crate::Error;
-        type Future = std::future::Ready<Result<Self, Self::Error>>;
-
-        fn from_request(req: &HttpRequest, _: &mut actix_web::dev::Payload) -> Self::Future {
-            let sess = req.extensions().get::<TestSession>().cloned();
-            std::future::ready(match sess {
-                Some(s) => Ok(InjectedSession(s)),
-                None => Err(crate::Error::new_internal_error(
-                    "session middleware was not installed on this route",
-                )),
-            })
-        }
-    }
-
     #[get("/whoami")]
-    async fn whoami(sess: InjectedSession) -> HttpResponse {
-        HttpResponse::Ok().body(sess.0.user_id)
+    async fn whoami(sess: Session<TestSession>) -> HttpResponse {
+        HttpResponse::Ok().body(sess.user_id.clone())
     }
 
     fn factory() -> (HeaderSessionFactory, Arc<AtomicUsize>) {
@@ -302,15 +330,32 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn session_extraction_without_middleware_is_a_server_error() {
+        // No UserSessionMiddleware wrapped: Session<T> extraction must fail
+        // as a 500 (wiring bug), not a 401.
+        let app = init_service(App::new().service(whoami)).await;
+
+        let req = TestRequest::get().uri("/whoami").to_request();
+        let resp = call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body: serde_json::Value = read_body_json(resp).await;
+        assert_eq!(body["errors"][0]["status"].as_str(), Some("500"));
+    }
+
+    #[actix_web::test]
     async fn skips_handler_on_extraction_failure() {
         // Verify that when extract returns Err the inner handler is never called.
         // We do this by mounting a handler that would *panic* if it ran without
         // a session being present, then sending a request with no auth header.
         #[get("/strict")]
-        async fn strict(sess: InjectedSession) -> HttpResponse {
+        async fn strict(sess: Session<TestSession>) -> HttpResponse {
             // Reaching this handler with no session would mean the middleware
             // failed to short-circuit on an Err extraction.
-            panic!("handler should not run when extract returns Err; got {}", sess.0.user_id);
+            panic!(
+                "handler should not run when extract returns Err; got {}",
+                sess.user_id
+            );
         }
 
         let (f, calls) = factory();
