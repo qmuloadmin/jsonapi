@@ -77,6 +77,23 @@ runtime "not supported" path.
   to honor it is the store's choice
 - `application/vnd.api+json` on every response (documents and errors alike)
 
+## Strict plain-JSON clients
+
+Every response this crate renders — documents and error documents alike —
+carries `Content-Type: application/vnd.api+json`, per spec. Some HTTP
+tooling is strict about `Accept: application/json` and balks at that media
+type even though the body is ordinary JSON. Wrap the app with
+[`actix::NegotiateContentType`] to relabel the header (not the body) to
+`application/json` whenever a request's `Accept` explicitly prefers it:
+
+```rust
+App::new().wrap(jsonapi::actix::NegotiateContentType).service(/* ... */)
+```
+
+It's opt-in and covers success documents, error documents, extractor
+failures, and hand-written routes uniformly, since it works at the
+middleware layer rather than in any one handler.
+
 ## Philosophy
 
 A prior attempt at this problem generified the *data-access layer* (generic
