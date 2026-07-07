@@ -404,7 +404,7 @@ async fn filter_narrows_results() {
     let app = full_app!(store);
 
     let req = TestRequest::get()
-        .uri("/widgets/?filter[name][contains]=Alice")
+        .uri("/widgets/?name[contains]=Alice")
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -417,6 +417,19 @@ async fn filter_narrows_results() {
             .unwrap()
             .contains("Alice"));
     }
+
+    // The `next` link preserves the flat filter param alongside the cursor
+    // (established convention: pagination links must not drop filters).
+    let req = TestRequest::get()
+        .uri("/widgets/?name[contains]=Alice&page[size]=1")
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = read_body_json(resp).await;
+    let next = body["links"]["next"]
+        .as_str()
+        .expect("expected a next link (2 Alice widgets, page size 1)");
+    assert!(next.contains("name[contains]=Alice"), "next link: {next}");
 }
 
 #[actix_web::test]

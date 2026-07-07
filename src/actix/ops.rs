@@ -96,8 +96,17 @@ pub trait Show: Store {
 
 /// Capability: `GET /{type}/`.
 pub trait List: Store {
-    /// Resource-specific filter type, deserialized from `filter[...]`.
-    type Filter: DeserializeOwned + Default;
+    /// Resource-specific filter type, deserialized FLAT from the top-level
+    /// query string by platform convention (e.g. `is_hidden=false`,
+    /// `name[contains]=shirt`) — see [`crate::ListQuery::parse`]. The names
+    /// `page`, `sort`, and `include` are reserved (parsed separately into
+    /// [`ListQuery`]'s other fields) and must not be used as filter field
+    /// names. Spec-style nesting under `filter[...]` is still available,
+    /// opt-in, by giving your filter type a single `filter: Inner` field.
+    /// A filter field absent from the query string falls back to its own
+    /// serde default, so make filter fields `Option`/`#[serde(default)]`
+    /// unless you want their absence to be a 400.
+    type Filter: DeserializeOwned;
     /// Resource-specific sort key enum, deserialized from `sort=...`. Use
     /// [`crate::Unsorted`] for resources that don't support sorting.
     type SortKey: DeserializeOwned;
@@ -228,7 +237,7 @@ where
     <S::Item as IntoResponse>::Attributes: Serialize,
     <S::Included as IntoResponse>::Attributes: Serialize,
 {
-    let q: ListQuery<S::Filter, S::SortKey> = parse_query(req.query_string())?;
+    let q = ListQuery::<S::Filter, S::SortKey>::parse(req.query_string())?;
     let WithIncluded {
         primary: page,
         included,

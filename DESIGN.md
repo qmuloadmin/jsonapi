@@ -108,7 +108,7 @@ pub trait Show: Store {
 }
 
 pub trait List: Store {
-    type Filter: DeserializeOwned + Default;   // nested under filter[...]
+    type Filter: DeserializeOwned;             // flat top-level query params
     type SortKey: DeserializeOwned;            // or Unsorted
     type Item: IntoResponse;
     async fn list(&self, ctx: Self::Ctx, q: ListQuery<Self::Filter, Self::SortKey>)
@@ -135,8 +135,18 @@ pub trait Delete: Store {
 ```
 
 `ListQuery` = `{ filter, page: PageParams, sort: SortSpec<K>, include: IncludeSet }`,
-parsed with `serde_qs` (form-encoding tolerant, so `%5B` from browser
-`URLSearchParams` works). Filters are spec-compliant under `filter[...]`.
+built by `ListQuery::parse`, which runs `serde_qs` (form-encoding tolerant, so
+`%5B` from browser `URLSearchParams` works) over the *same* query string
+twice: once for the reserved `page`/`sort`/`include` names, once for the
+filter type `F` at the top level. Filters are FLAT (`is_hidden=false`,
+`name[contains]=shirt`) by platform convention, because that's the wire
+contract this crate's actual consumers already use. `#[serde(flatten)]` was
+considered and ruled out as the mechanism for this: serde_qs (like serde_json)
+buffers flattened content into an untyped map first, which loses the
+string→bool/number coercion that filter fields commonly rely on (e.g.
+`Option<bool>` filter fields silently fail to parse `"false"`). Parsing twice
+avoids that pitfall entirely. Spec-style nesting under `filter[...]` is still
+available, opt-in, via a filter type with a single `filter: Inner` field.
 
 ## Mounting
 

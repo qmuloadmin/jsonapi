@@ -6,7 +6,7 @@
 //! exercised in unit tests (and reused by any transport, not just actix-web).
 
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
-use serde::de::IntoDeserializer;
+use serde::de::{DeserializeOwned, IntoDeserializer};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::document::PaginationLinks;
@@ -162,7 +162,9 @@ impl<'de> serde::Deserialize<'de> for IncludeSet {
     }
 }
 
-/// A string filter operator: `filter[name][eq]=x` or `filter[name][contains]=y`.
+/// A string filter operator: `name[eq]=x` or `name[contains]=y` (flat, per
+/// platform convention — see [`ListQuery::parse`]); equally usable nested as
+/// `filter[name][eq]=x` if your filter type opts into spec-style nesting.
 ///
 /// Externally tagged (the single key of the nested map selects the variant).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -174,7 +176,9 @@ pub enum StringMatch {
     Contains(String),
 }
 
-/// A numeric/orderable range filter: `filter[price][gte]=10&filter[price][lte]=20`.
+/// A numeric/orderable range filter: `price[gte]=10&price[lte]=20` (flat, per
+/// platform convention); equally usable nested as `filter[price][gte]=10` if
+/// your filter type opts into spec-style nesting.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, bound(deserialize = "T: serde::Deserialize<'de>"))]
 pub struct Range<T> {
@@ -211,11 +215,13 @@ impl<T> Range<T> {
 
 /// Full typed query for a `GET /{type}/` list endpoint: filters, pagination,
 /// sort and `include`, all parsed together from one query string by
-/// [`parse_query`].
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, bound(deserialize = "F: serde::Deserialize<'de> + Default, K: serde::Deserialize<'de>"))]
+/// [`ListQuery::parse`].
+#[derive(Debug, Clone)]
 pub struct ListQuery<F, K> {
-    /// Resource-specific filter, nested under `filter[...]`.
+    /// Resource-specific filter. Parsed FLAT from the top-level query string
+    /// by platform convention (e.g. `is_hidden=false`, `name[contains]=x`);
+    /// see [`ListQuery::parse`] for the reserved-name rules and how to opt
+    /// into spec-style `filter[...]` nesting instead.
     pub filter: F,
     /// Cursor pagination params, nested under `page[...]`.
     pub page: PageParams,
@@ -236,6 +242,50 @@ impl<F: Default, K> Default for ListQuery<F, K> {
     }
 }
 
+/// The reserved-name part of a list query: pagination, sort and include,
+/// parsed together from their reserved top-level names (`page`, `sort`,
+/// `include`) regardless of whatever filter type is layered on top by
+/// [`ListQuery::parse`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, bound(deserialize = "K: serde::Deserialize<'de>"))]
+struct ListCore<K> {
+    page: PageParams,
+    sort: SortSpec<K>,
+    include: IncludeSet,
+}
+
+impl<K> Default for ListCore<K> {
+    fn default() -> Self {
+        ListCore {
+            page: PageParams::default(),
+            sort: SortSpec::default(),
+            include: IncludeSet::default(),
+        }
+    }
+}
+
+impl<F: DeserializeOwned, K: DeserializeOwned> ListQuery<F, K> {
+    /// Parse a full list query string. `page`/`sort`/`include` are parsed
+    /// from their reserved names; the filter type `F` is deserialized from
+    /// the SAME query string at the TOP level, so filters are flat
+    /// (`is_hidden=false`, `name[contains]=shirt`) per platform convention.
+    /// Spec-style nesting is available by giving your filter struct a single
+    /// `filter: Inner` field. `F`'s fields must not be named `page`, `sort`,
+    /// or `include` (reserved); unknown query params are ignored, and a
+    /// filter field the client omits uses its serde default — make filter
+    /// fields Option/defaulted unless you want their absence to be a 400.
+    pub fn parse(query_string: &str) -> Result<Self, Error> {
+        let core: ListCore<K> = parse_query(query_string)?;
+        let filter: F = parse_query(query_string)?;
+        Ok(ListQuery {
+            filter,
+            page: core.page,
+            sort: core.sort,
+            include: core.include,
+        })
+    }
+}
+
 /// Full typed query for a `GET /{type}/{id}` show endpoint: just `include`.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default)]
@@ -245,8 +295,9 @@ pub struct ShowQuery {
 }
 
 /// Parse a raw query string (as found after the `?` in a request URI) into a
-/// typed query struct (typically [`ListQuery`] or [`ShowQuery`]), using
-/// `serde_qs` in form-encoding-tolerant mode with a nesting depth of 5.
+/// typed struct — [`ShowQuery`] directly, or (for list endpoints) the
+/// building blocks [`ListQuery::parse`] runs internally — using `serde_qs` in
+/// form-encoding-tolerant mode with a nesting depth of 5.
 ///
 /// Any parse failure (unknown sort key, malformed nesting, etc.) is mapped to
 /// a `400 Bad Request` [`Error`] with the underlying `serde_qs` error message
@@ -413,12 +464,13 @@ mod tests {
     }
 
     fn happy_path_query() -> &'static str {
-        "filter[name][contains]=shirt&filter[price][gte]=10&filter[price][lte]=20&sort=-created_at,name&page[size]=25&page[after]=abc123&include=author,comments.author"
+        "name[contains]=shirt&price[gte]=10&price[lte]=20&sort=-created_at,name&page[size]=25&page[after]=abc123&include=author,comments.author"
     }
 
     #[test]
     fn full_happy_path() {
-        let q: ListQuery<MyFilter, MySort> = parse_query(happy_path_query()).expect("should parse");
+        let q: ListQuery<MyFilter, MySort> =
+            ListQuery::parse(happy_path_query()).expect("should parse");
         assert_eq!(q.filter.name, Some(StringMatch::Contains("shirt".into())));
         assert_eq!(q.filter.price.gte, Some(10));
         assert_eq!(q.filter.price.lte, Some(20));
@@ -439,11 +491,11 @@ mod tests {
 
     #[test]
     fn form_encoded_happy_path_parses_identically() {
-        let encoded = "filter%5Bname%5D%5Bcontains%5D=shirt&filter%5Bprice%5D%5Bgte%5D=10&filter%5Bprice%5D%5Blte%5D=20&sort=-created_at,name&page%5Bsize%5D=25&page%5Bafter%5D=abc123&include=author,comments.author";
+        let encoded = "name%5Bcontains%5D=shirt&price%5Bgte%5D=10&price%5Blte%5D=20&sort=-created_at,name&page%5Bsize%5D=25&page%5Bafter%5D=abc123&include=author,comments.author";
         let plain: ListQuery<MyFilter, MySort> =
-            parse_query(happy_path_query()).expect("should parse");
+            ListQuery::parse(happy_path_query()).expect("should parse");
         let via_encoded: ListQuery<MyFilter, MySort> =
-            parse_query(encoded).expect("should parse form-encoded");
+            ListQuery::parse(encoded).expect("should parse form-encoded");
         assert_eq!(plain.filter, via_encoded.filter);
         assert_eq!(plain.sort.0, via_encoded.sort.0);
         assert_eq!(plain.page, via_encoded.page);
@@ -452,7 +504,7 @@ mod tests {
 
     #[test]
     fn empty_query_string_is_all_defaults() {
-        let q: ListQuery<MyFilter, MySort> = parse_query("").expect("should parse");
+        let q: ListQuery<MyFilter, MySort> = ListQuery::parse("").expect("should parse");
         assert_eq!(q.filter, MyFilter::default());
         assert!(q.page.size.is_none());
         assert!(q.page.after.is_none());
@@ -463,7 +515,7 @@ mod tests {
 
     #[test]
     fn unknown_sort_key_is_error() {
-        let err = parse_query::<ListQuery<MyFilter, MySort>>("sort=bogus_field")
+        let err = ListQuery::<MyFilter, MySort>::parse("sort=bogus_field")
             .expect_err("unknown sort key should fail");
         let msg = format!("{:?}", err);
         assert!(
@@ -475,11 +527,11 @@ mod tests {
 
     #[test]
     fn unsorted_rejects_sort_param_but_allows_absence() {
-        let err = parse_query::<ListQuery<MyFilter, Unsorted>>("sort=name")
+        let err = ListQuery::<MyFilter, Unsorted>::parse("sort=name")
             .expect_err("sort should be rejected for Unsorted resources");
         assert!(err.detail.as_deref().unwrap_or("").contains("does not support sorting"));
 
-        let ok = parse_query::<ListQuery<MyFilter, Unsorted>>("").expect("absent sort is fine");
+        let ok = ListQuery::<MyFilter, Unsorted>::parse("").expect("absent sort is fine");
         assert!(ok.sort.is_empty());
     }
 
@@ -491,10 +543,47 @@ mod tests {
         let contains: StringMatch = parse_query("contains=foo").expect("contains should parse");
         assert_eq!(contains, StringMatch::Contains("foo".into()));
 
-        // As it appears nested under a filter field, e.g. `filter[name][contains]=foo`.
+        // As it appears on a flat filter field, e.g. `name[eq]=foo`.
         let q: ListQuery<MyFilter, MySort> =
-            parse_query("filter[name][eq]=foo").expect("nested eq should parse");
+            ListQuery::parse("name[eq]=foo").expect("flat eq should parse");
         assert_eq!(q.filter.name, Some(StringMatch::Eq("foo".into())));
+    }
+
+    #[test]
+    fn spec_style_nesting_still_works_via_wrapper() {
+        // Opt-in spec-style nesting: a filter type with a single `filter`
+        // field recovers `filter[name][contains]=shirt`-style nesting.
+        #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+        struct SpecFilter {
+            #[serde(default)]
+            filter: MyFilter,
+        }
+
+        let q: ListQuery<SpecFilter, MySort> = ListQuery::parse("filter[name][contains]=shirt")
+            .expect("spec-style nested filter should parse");
+        assert_eq!(
+            q.filter.filter.name,
+            Some(StringMatch::Contains("shirt".into()))
+        );
+    }
+
+    #[test]
+    fn flat_real_world_consumer_query_parses() {
+        // The actual wire convention used by this crate's consumers: flat
+        // top-level filter fields alongside reserved `include`/`page` names.
+        #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+        struct DesignerFilter {
+            is_hidden: Option<bool>,
+            is_featured: Option<bool>,
+        }
+
+        let q: ListQuery<DesignerFilter, Unsorted> =
+            ListQuery::parse("is_hidden=false&include=user&page[size]=1000")
+                .expect("flat real-world consumer query should parse");
+        assert_eq!(q.filter.is_hidden, Some(false));
+        assert_eq!(q.filter.is_featured, None);
+        assert!(q.include.contains("user"));
+        assert_eq!(q.page.size, Some(1000));
     }
 
     #[test]
@@ -534,12 +623,12 @@ mod tests {
     fn next_page_link_preserves_other_params_and_order() {
         let link = next_page_link(
             "/widgets",
-            "filter[name][eq]=foo&sort=-created_at&page[size]=10",
+            "name[eq]=foo&sort=-created_at&page[size]=10",
             "cur+sor/==",
         );
         assert_eq!(
             link,
-            "/widgets?filter[name][eq]=foo&sort=-created_at&page[size]=10&page[after]=cur%2Bsor%2F%3D%3D"
+            "/widgets?name[eq]=foo&sort=-created_at&page[size]=10&page[after]=cur%2Bsor%2F%3D%3D"
         );
     }
 
@@ -547,10 +636,10 @@ mod tests {
     fn next_page_link_strips_existing_after_before_literal_and_encoded() {
         let link = next_page_link(
             "/widgets",
-            "page[after]=old&filter[name][eq]=foo&page%5Bbefore%5D=older&sort=name",
+            "page[after]=old&name[eq]=foo&page%5Bbefore%5D=older&sort=name",
             "newcursor",
         );
-        assert_eq!(link, "/widgets?filter[name][eq]=foo&sort=name&page[after]=newcursor");
+        assert_eq!(link, "/widgets?name[eq]=foo&sort=name&page[after]=newcursor");
     }
 
     #[test]

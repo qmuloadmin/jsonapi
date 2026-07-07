@@ -65,8 +65,13 @@ runtime "not supported" path.
 
 ## URL conventions handled for you
 
-- `filter[name][eq]=x`, `filter[name][contains]=y` — via [`StringMatch`]
-- `filter[price][gte]=10&filter[price][lte]=20` — via [`Range<T>`]
+- Filters are FLAT top-level query params, per this crate's actual downstream
+  wire contracts (not nested under `filter[...]`): `name[eq]=x`,
+  `name[contains]=y` — via [`StringMatch`]; `price[gte]=10&price[lte]=20` —
+  via [`Range<T>`]. The names `page`, `sort`, and `include` are reserved
+  (parsed separately) and must not be used as filter field names. Spec-style
+  nesting under `filter[...]` is still available, opt-in, by giving your
+  filter type a single `filter: Inner` field — see `ListQuery::parse`.
 - `sort=-created,name` — parses into an ordered `Vec<(K, Direction)>`; unknown
   keys are a 400, not silently ignored
 - `page[size]=25&page[after]=<cursor>` — the

@@ -376,7 +376,7 @@ async fn main() -> std::io::Result<()> {
     println!();
     println!("Try (fake auth: x-user is one of alice, bob, admin):");
     println!("  curl -H 'x-user: alice' http://127.0.0.1:8080/todos/");
-    println!("  curl -H 'x-user: alice' 'http://127.0.0.1:8080/todos/?filter[done]=false&sort=title'");
+    println!("  curl -H 'x-user: alice' 'http://127.0.0.1:8080/todos/?done=false&sort=title'");
     println!("  curl -H 'x-user: alice' 'http://127.0.0.1:8080/todos/?page[size]=2'");
     println!("  curl -H 'x-user: alice' http://127.0.0.1:8080/todos/00000000-0000-0000-0000-000000000065");
     println!(
