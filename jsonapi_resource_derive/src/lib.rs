@@ -10,6 +10,7 @@ use syn::{self, Type};
 #[darling(attributes(jsonapi), supports(struct_named, enum_any))]
 struct ResourceProps {
     ident: syn::Ident,
+    vis: syn::Visibility,
     data: ast::Data<ResourceVariant, ResourceField>,
     name: Option<String>,
 }
@@ -315,6 +316,11 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props = ResourceProps::from_derive_input(ast).unwrap();
     if props.data.is_enum() {
         let name = props.ident;
+        // The companion attributes enum must be at least as visible as the
+        // deriving enum: it appears in the deriving enum's IntoResponse
+        // associated type, so a private companion on a pub(crate)+ input is
+        // an E0446 "private type in public interface" error downstream.
+        let vis = props.vis;
         let attr_enum_name =
             Type::from_string(&format!("Jsonapi_{}IncludedAttrs", name.clone())).unwrap();
         let variant_stmts: Vec<TS2> = props
@@ -356,7 +362,8 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
 
             #[derive(Serialize)]
             #[serde(untagged)]
-            enum #attr_enum_name {
+            #[allow(non_camel_case_types)]
+            #vis enum #attr_enum_name {
                 #(#variant_stmts)*
             }
 

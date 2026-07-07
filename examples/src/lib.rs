@@ -34,8 +34,11 @@ struct FakeRelations {
 }
 
 #[derive(IntoResponse)]
-// All the types that can be included in the response of FakeResponse
-enum Included {
+// All the types that can be included in the response of FakeResponse.
+// pub(crate) is deliberate: it exercises the derive propagating the input
+// enum's visibility to the generated companion attributes enum (a private
+// companion on a non-private input is an E0446 downstream).
+pub(crate) enum Included {
 	// TODO need to fix the Option<()> type and use a different type. See macro crate
     #[jsonapi(attr_name = "Option<()>")]
     Fake(FakeResponse),
