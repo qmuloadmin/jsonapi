@@ -65,8 +65,7 @@ runtime "not supported" path.
 
 ## URL conventions handled for you
 
-- Filters are FLAT top-level query params, per this crate's actual downstream
-  wire contracts (not nested under `filter[...]`): `name[eq]=x`,
+- Filters are FLAT top-level query params: `name[eq]=x`,
   `name[contains]=y` — via [`StringMatch`]; `price[gte]=10&price[lte]=20` —
   via [`Range<T>`]. The names `page`, `sort`, and `include` are reserved
   (parsed separately) and must not be used as filter field names. Spec-style
@@ -98,17 +97,6 @@ App::new().wrap(jsonapi::actix::NegotiateContentType).service(/* ... */)
 It's opt-in and covers success documents, error documents, extractor
 failures, and hand-written routes uniformly, since it works at the
 middleware layer rather than in any one handler.
-
-## Philosophy
-
-A prior attempt at this problem generified the *data-access layer* (generic
-traits over Diesel tables) and left the HTTP layer — where the actual
-per-resource boilerplate lived — hand-rolled 50+ times over. This crate
-inverts that: the HTTP/document layer is generic (routing, extraction, query
-parsing, envelopes, pagination, errors), and the data layer is a plain
-`async fn` per operation, free to do whatever it needs (Diesel, transactions,
-external API calls) with no trait-bound explosion. See [`DESIGN.md`](DESIGN.md)
-for the full rationale and staging.
 
 ## Examples
 
