@@ -31,7 +31,7 @@ use std::marker::PhantomData;
 use actix_web::{
     dev::{AppService, HttpServiceFactory},
     http::StatusCode,
-    web, HttpRequest, HttpResponse, HttpResponseBuilder,
+    web, HttpRequest, HttpResponse, HttpResponseBuilder, Route,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -39,7 +39,7 @@ use crate::actix::extract::{error_document_response, JsonApi, MEDIA_TYPE};
 use crate::{
     pagination_links, parse_query, CursorPage, EstimatedTotal, Error, FromID, IntoResponse,
     ListQuery, PageMeta, ResourceResponse, ResourceType, Response, ResponseMeta, ResponseType,
-    ShowQuery, Total, ID,
+    ShowQuery, Total, WithIncluded, ID,
 };
 
 /// Convenient alias for the id type of a store's resource.
@@ -66,6 +66,12 @@ pub trait Show: Store {
     /// The domain type returned by a successful `show`, converted to a
     /// JSON:API resource document via [`IntoResponse`].
     type Shown: IntoResponse;
+    /// The type of resources this store can sideload into `included`.
+    /// Typically a hand- or derive-built `enum` when more than one resource
+    /// type can be sideloaded (`#[derive(IntoResponse)]` supports enums for
+    /// exactly this — each variant becomes a possible included resource
+    /// type); [`crate::NoIncluded`] for stores that never sideload anything.
+    type Included: IntoResponse;
 
     /// Fetch a single resource by id.
     ///
@@ -73,12 +79,19 @@ pub trait Show: Store {
     /// parsed `include` query parameter. Authorization decisions (e.g.
     /// "does `ctx` have access to this resource") are this method's
     /// responsibility — the crate only guarantees `ctx` is present and typed.
+    ///
+    /// Relationship linkage (the `relationships` member's resource
+    /// identifiers) should always be returned regardless of `q.include`;
+    /// `q.include` only gates whether the *full* sideloaded resources are
+    /// also returned via [`WithIncluded::including`] (established downstream
+    /// convention: linkage is cheap and always useful, sideloaded resources
+    /// cost an extra fetch and are opt-in).
     fn show(
         &self,
         ctx: Self::Ctx,
         id: IdOf<Self>,
         q: ShowQuery,
-    ) -> impl Future<Output = Result<Self::Shown, Error>>;
+    ) -> impl Future<Output = Result<WithIncluded<Self::Shown, Self::Included>, Error>>;
 }
 
 /// Capability: `GET /{type}/`.
@@ -91,6 +104,12 @@ pub trait List: Store {
     /// The domain type of one list item, converted to a JSON:API resource
     /// document via [`IntoResponse`].
     type Item: IntoResponse;
+    /// The type of resources this store can sideload into `included`.
+    /// Typically a hand- or derive-built `enum` when more than one resource
+    /// type can be sideloaded (`#[derive(IntoResponse)]` supports enums for
+    /// exactly this); [`crate::NoIncluded`] for stores that never sideload
+    /// anything.
+    type Included: IntoResponse;
 
     /// Fetch one page of results.
     ///
@@ -99,11 +118,16 @@ pub trait List: Store {
     /// (the "fetch `size + 1` rows" idiom) so `has_more` is known without a
     /// separate count query; attach a [`Total`] via
     /// [`CursorPage::with_total`] if the store can cheaply produce one.
+    ///
+    /// Relationship linkage should always be returned regardless of
+    /// `q.include`; `q.include` only gates whether the full sideloaded
+    /// resources are also returned via [`WithIncluded::including`]
+    /// (established downstream convention).
     fn list(
         &self,
         ctx: Self::Ctx,
         q: ListQuery<Self::Filter, Self::SortKey>,
-    ) -> impl Future<Output = Result<CursorPage<Self::Item>, Error>>;
+    ) -> impl Future<Output = Result<WithIncluded<CursorPage<Self::Item>, Self::Included>, Error>>;
 
     /// Cursor stamped on each item (`meta.page.cursor`) and used for the
     /// `page[after]` next link. Defaults to the item's resource id.
@@ -179,11 +203,19 @@ async fn show_handler<S>(
 where
     S: Show,
     <S::Shown as IntoResponse>::Attributes: Serialize,
+    <S::Included as IntoResponse>::Attributes: Serialize,
 {
     let id = <IdOf<S> as FromID>::from_id(ID(path.into_inner()))?;
     let q: ShowQuery = parse_query(req.query_string())?;
-    let shown = store.show(ctx, id, q).await?;
-    Ok(document(StatusCode::OK, &Response::<_, ()>::from(shown)))
+    let WithIncluded { primary, included } = store.show(ctx, id, q).await?;
+    let response: Response<_, <S::Included as IntoResponse>::Attributes> =
+        Response::from(primary);
+    let response = if included.is_empty() {
+        response
+    } else {
+        response.include_many(included)
+    };
+    Ok(document(StatusCode::OK, &response))
 }
 
 async fn list_handler<S>(
@@ -194,13 +226,23 @@ async fn list_handler<S>(
 where
     S: List,
     <S::Item as IntoResponse>::Attributes: Serialize,
+    <S::Included as IntoResponse>::Attributes: Serialize,
 {
     let q: ListQuery<S::Filter, S::SortKey> = parse_query(req.query_string())?;
-    let page = store.list(ctx, q).await?;
+    let WithIncluded {
+        primary: page,
+        included,
+    } = store.list(ctx, q).await?;
     let has_more = page.has_more;
     let total = page.total;
 
-    let response: Response<_, ()> = Response::from(page.items).with_item_cursors(S::item_cursor);
+    let response: Response<_, <S::Included as IntoResponse>::Attributes> =
+        Response::from(page.items).with_item_cursors(S::item_cursor);
+    let response = if included.is_empty() {
+        response
+    } else {
+        response.include_many(included)
+    };
 
     let last_cursor = match &response.primary {
         ResponseType::Ok(items) => items
@@ -303,6 +345,7 @@ impl<S: Store> ResourceScope<S> {
     where
         S: Show,
         <S::Shown as IntoResponse>::Attributes: Serialize,
+        <S::Included as IntoResponse>::Attributes: Serialize,
     {
         self.scope = self.scope.route("/{id}", web::get().to(show_handler::<S>));
         self
@@ -313,11 +356,35 @@ impl<S: Store> ResourceScope<S> {
     where
         S: List,
         <S::Item as IntoResponse>::Attributes: Serialize,
+        <S::Included as IntoResponse>::Attributes: Serialize,
     {
         self.scope = self
             .scope
             .route("", web::get().to(list_handler::<S>))
             .route("/", web::get().to(list_handler::<S>));
+        self
+    }
+
+    /// Mount a custom route inside this resource's scope, at a path relative
+    /// to the scope's prefix (e.g. `"/{id}/actions/verify"` for the actions
+    /// pattern).
+    ///
+    /// Exists because actix does not fall through between two scopes sharing
+    /// a prefix: a hand-written route for this resource (an actions
+    /// endpoint, a denormalized read) has to be mounted inside the *same*
+    /// scope as the generated routes, or it will never be reached whenever
+    /// the generated scope also matches the prefix.
+    pub fn route(mut self, path: &str, route: Route) -> Self {
+        self.scope = self.scope.route(path, route);
+        self
+    }
+
+    /// Mount any [`HttpServiceFactory`] inside this resource's scope, for
+    /// when a single `.route(...)` isn't enough (e.g. a sub-scope of related
+    /// hand-written endpoints). See [`ResourceScope::route`] for why this
+    /// needs to share the scope rather than being mounted alongside it.
+    pub fn service(mut self, factory: impl HttpServiceFactory + 'static) -> Self {
+        self.scope = self.scope.service(factory);
         self
     }
 

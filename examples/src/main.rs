@@ -15,7 +15,7 @@ use actix_web::{dev::ServiceRequest, web, App, HttpServer};
 use jsonapi::actix::ops::{Create, Delete, IdOf, List, Show, Store, Update};
 use jsonapi::actix::resource;
 use jsonapi::auth::{Session, UserSessionFactory, UserSessionMiddleware};
-use jsonapi::{CursorPage, Direction, Error, ListQuery, ShowQuery, StringMatch, Total};
+use jsonapi::{CursorPage, Direction, Error, ListQuery, NoIncluded, ShowQuery, StringMatch, Total, WithIncluded};
 use jsonapi_resource_derive::{FromRelationships, FromRequest, IntoRelationships, IntoResponse, ResourceType};
 use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -224,14 +224,21 @@ impl Store for TodoStore {
 
 impl Show for TodoStore {
     type Shown = TodoResource;
+    type Included = NoIncluded;
 
-    async fn show(&self, _ctx: Session<User>, id: IdOf<Self>, _q: ShowQuery) -> Result<Self::Shown, Error> {
+    async fn show(
+        &self,
+        _ctx: Session<User>,
+        id: IdOf<Self>,
+        _q: ShowQuery,
+    ) -> Result<WithIncluded<Self::Shown, Self::Included>, Error> {
         self.inner
             .read()
             .unwrap()
             .get(&id)
             .cloned()
             .map(to_resource)
+            .map(Into::into)
             .ok_or_else(|| Error::new_not_found("todo not found"))
     }
 }
@@ -240,12 +247,13 @@ impl List for TodoStore {
     type Filter = TodoFilter;
     type SortKey = TodoSortKey;
     type Item = TodoResource;
+    type Included = NoIncluded;
 
     async fn list(
         &self,
         _ctx: Session<User>,
         q: ListQuery<Self::Filter, Self::SortKey>,
-    ) -> Result<CursorPage<Self::Item>, Error> {
+    ) -> Result<WithIncluded<CursorPage<Self::Item>, Self::Included>, Error> {
         let map = self.inner.read().unwrap();
         let mut items: Vec<Todo> = map
             .values()
@@ -294,7 +302,8 @@ impl List for TodoStore {
 
         Ok(CursorPage::from_probe(probe, size)
             .map(to_resource)
-            .with_total(Total::Exact(total)))
+            .with_total(Total::Exact(total))
+            .into())
     }
 }
 

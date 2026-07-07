@@ -170,6 +170,11 @@ pub struct ResourceMeta {
 pub struct Response<P, I> {
     #[serde(flatten)]
     pub primary: ResponseType<P>,
+    /// Sideloaded resources for a compound document. Per JSON:API, `included`
+    /// must either be absent or a (possibly empty, if `include` was
+    /// requested but matched nothing) array — never `null`. `None` therefore
+    /// omits the member entirely rather than serializing as `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub included: Option<Vec<ResourceResponse<I>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub links: Option<PaginationLinks>,
@@ -243,6 +248,48 @@ impl<P, I> Response<P, I> {
 
 impl<P> Response<P, Option<()>> {
     pub fn finish(self) -> Self {
+        self
+    }
+}
+
+/// A store's primary result plus resources to sideload into the document's
+/// `included` array (JSON:API compound documents).
+///
+/// `Show`/`List` implementations return this instead of the bare primary
+/// value so a store can optionally sideload related resources gated on the
+/// request's `include` query parameter. Stores that never sideload anything
+/// can just write `Ok(primary.into())` (`From<T>` produces an empty
+/// `included`), typically pairing `T`'s `Included` associated type with
+/// [`crate::NoIncluded`].
+pub struct WithIncluded<T, I> {
+    /// The primary result (a `Show::Shown` value, or a `List::Item` page).
+    pub primary: T,
+    /// Resources to sideload into `included`, in `IntoResponse` form (not
+    /// yet converted to `ResourceResponse`).
+    pub included: Vec<I>,
+}
+
+impl<T, I> From<T> for WithIncluded<T, I> {
+    fn from(primary: T) -> Self {
+        WithIncluded {
+            primary,
+            included: Vec::new(),
+        }
+    }
+}
+
+impl<T, I> WithIncluded<T, I> {
+    /// Construct with an empty `included` list.
+    pub fn new(primary: T) -> Self {
+        WithIncluded {
+            primary,
+            included: Vec::new(),
+        }
+    }
+
+    /// Append resources to the `included` list.
+    pub fn including(mut self, resources: impl IntoIterator<Item = I>) -> Self {
+        self.included.extend(resources);
         self
     }
 }

@@ -78,6 +78,24 @@ pub trait IntoResponse {
     fn into_response(self) -> ResourceResponse<Self::Attributes>;
 }
 
+/// Uninhabited type for stores whose `Show`/`List` never sideload any
+/// resources: it cannot be constructed, so a store can write
+/// `type Included = NoIncluded;` and always return `.into()` (an empty
+/// `included`) without any dead branches to justify.
+///
+/// Its `IntoResponse` impl exists only to satisfy the `Included: IntoResponse`
+/// bound; the `match self {}` is unreachable because no value of this type
+/// can ever exist.
+pub enum NoIncluded {}
+
+impl IntoResponse for NoIncluded {
+    type Attributes = ();
+
+    fn into_response(self) -> ResourceResponse<Self::Attributes> {
+        match self {}
+    }
+}
+
 pub trait FromRequest
 where
     Self: Sized,

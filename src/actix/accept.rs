@@ -249,18 +249,20 @@ mod tests {
 
     impl crate::actix::ops::Show for WidgetStore {
         type Shown = WidgetOut;
+        type Included = crate::NoIncluded;
 
         async fn show(
             &self,
             _ctx: (),
             id: usize,
             _q: crate::ShowQuery,
-        ) -> Result<Self::Shown, Error> {
+        ) -> Result<crate::WithIncluded<Self::Shown, Self::Included>, Error> {
             if id == 1 {
                 Ok(WidgetOut(Widget {
                     id: 1,
                     name: "Alice".to_owned(),
-                }))
+                })
+                .into())
             } else {
                 Err(Error::new_not_found("widget not found"))
             }
