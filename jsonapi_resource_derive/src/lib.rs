@@ -10,6 +10,7 @@ use syn::{self, Type};
 #[darling(attributes(jsonapi), supports(struct_named, enum_any))]
 struct ResourceProps {
     ident: syn::Ident,
+    vis: syn::Visibility,
     data: ast::Data<ResourceVariant, ResourceField>,
     name: Option<String>,
 }
@@ -69,6 +70,11 @@ pub fn from_relations_macro_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(FromRequest, attributes(jsonapi))]
 pub fn from_request_macro_derive(input: TokenStream) -> TokenStream {
     impl_from_request_macro(&syn::parse(input).unwrap())
+}
+
+#[proc_macro_derive(ResourceType, attributes(jsonapi))]
+pub fn resource_type_macro_derive(input: TokenStream) -> TokenStream {
+    impl_resource_type_macro(&syn::parse(input).unwrap())
 }
 
 fn impl_from_request_macro(ast: &syn::DeriveInput) -> TokenStream {
@@ -161,6 +167,36 @@ fn impl_from_request_macro(ast: &syn::DeriveInput) -> TokenStream {
                 };
                 Ok(result)
             }
+        }
+    };
+    gen.into()
+}
+
+fn impl_resource_type_macro(ast: &syn::DeriveInput) -> TokenStream {
+    let props = ResourceProps::from_derive_input(ast).unwrap();
+    let desc = ResourceFieldDescription::from(props);
+    let name = desc.name;
+    // NOTE: ResourceFieldDescription::type_name mirrors the default/custom
+    // name computation used by `IntoResponse`'s derive (`format!("{}s",
+    // name)` or the `#[jsonapi(name = "...")]` override), but that runtime
+    // path lowercases at `into_response` time (`.to_owned().to_lowercase()`).
+    // TYPE_NAME is a const, so we must lowercase here, at macro-expansion
+    // time, to agree with `IntoResponse` on the same wire type name.
+    let type_name = desc.type_name.to_lowercase();
+    let id_ty = match desc.id_field {
+        Some(field) => field.ty,
+        None => {
+            let msg = format!(
+                "deriving ResourceType for {} requires an `id` field",
+                name
+            );
+            return quote! { compile_error!(#msg); }.into();
+        }
+    };
+    let gen = quote! {
+        impl ::jsonapi::ResourceType for #name {
+            const TYPE_NAME: &'static str = #type_name;
+            type Id = #id_ty;
         }
     };
     gen.into()
@@ -280,6 +316,11 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
     let props = ResourceProps::from_derive_input(ast).unwrap();
     if props.data.is_enum() {
         let name = props.ident;
+        // The companion attributes enum must be at least as visible as the
+        // deriving enum: it appears in the deriving enum's IntoResponse
+        // associated type, so a private companion on a pub(crate)+ input is
+        // an E0446 "private type in public interface" error downstream.
+        let vis = props.vis;
         let attr_enum_name =
             Type::from_string(&format!("Jsonapi_{}IncludedAttrs", name.clone())).unwrap();
         let variant_stmts: Vec<TS2> = props
@@ -321,7 +362,8 @@ fn impl_responder_macro(ast: &syn::DeriveInput) -> TokenStream {
 
             #[derive(Serialize)]
             #[serde(untagged)]
-            enum #attr_enum_name {
+            #[allow(non_camel_case_types)]
+            #vis enum #attr_enum_name {
                 #(#variant_stmts)*
             }
 

@@ -2,18 +2,33 @@
 name = "jsonapi"
 version = "0.2.0"
 edition = "2021"
+# `examples/` is a standalone crate (its own Cargo.toml), not a set of cargo
+# example targets for this package. Without this, `examples/src/main.rs`
+# would be auto-discovered as an example binary named "src" of this crate
+# (cargo's `examples/<name>/main.rs` convention) and built/tested as part of
+# this crate's own `cargo test`/`cargo build`.
+autoexamples = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix-web = {version="4", optional=true}
+# 4.11 minimum: the actix module uses actix_web::mime (re-exported since 4.11)
+actix-web = {version="4.11", optional=true}
 serde = "1"
 serde_derive = "1"
 serde_json = "1"
+serde_qs = { version = "1.1", features = ["default_to_form_encoding"] }
+percent-encoding = "2"
 futures-core = {version="0.3", optional=true}
 uuid = {version ="1.2.1", features=["serde", "v4", "fast-rng"], optional=true}
+# default-features=false: this crate only needs diesel::result::Error and the
+# DatabaseErrorInformation trait, neither of which require a backend
+# (postgres/mysql/sqlite) feature. Consumers pick their own backend feature
+# independently in their own Cargo.toml.
+diesel = { version = "2", optional = true, default-features = false }
 
 [features]
 server = ["uuid"]
 actixweb = ["futures-core", "actix-web"]
+diesel = ["dep:diesel"]
 default = ["server"]

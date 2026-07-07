@@ -1,4 +1,4 @@
-use jsonapi_resource_derive::{FromRequest, IntoRelationships, IntoResponse};
+use jsonapi_resource_derive::{FromRequest, IntoRelationships, IntoResponse, ResourceType};
 use serde_derive::Serialize;
 use uuid::Uuid;
 
@@ -14,7 +14,7 @@ struct SimpleAttributes {
     bar: Option<isize>,
 }
 
-#[derive(IntoResponse)]
+#[derive(IntoResponse, ResourceType)]
 #[jsonapi(name = "simples")]
 struct SimpleResponse {
     id: Uuid,
@@ -34,8 +34,11 @@ struct FakeRelations {
 }
 
 #[derive(IntoResponse)]
-// All the types that can be included in the response of FakeResponse
-enum Included {
+// All the types that can be included in the response of FakeResponse.
+// pub(crate) is deliberate: it exercises the derive propagating the input
+// enum's visibility to the generated companion attributes enum (a private
+// companion on a non-private input is an E0446 downstream).
+pub(crate) enum Included {
 	// TODO need to fix the Option<()> type and use a different type. See macro crate
     #[jsonapi(attr_name = "Option<()>")]
     Fake(FakeResponse),
@@ -85,6 +88,13 @@ mod tests {
         req.data.id = Some(id.into());
         assert!(SimpleRequest::from_request(req.clone()).is_err());
     }
+    #[test]
+    fn test_resource_type_derive() {
+        assert_eq!(<SimpleResponse as jsonapi::ResourceType>::TYPE_NAME, "simples");
+        fn assert_id_is_uuid<R: jsonapi::ResourceType<Id = Uuid>>() {}
+        assert_id_is_uuid::<SimpleResponse>();
+    }
+
     #[test]
     fn test_responder() {
         // this isn't purposeful, yet. If it compiles, then it works. There's no
